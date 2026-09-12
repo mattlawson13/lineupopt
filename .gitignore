@@ -1,0 +1,19 @@
+# Python
+backend/.venv/
+**/__pycache__/
+*.pyc
+backend/.cache/
+backend/lineupopt.db
+backend/*.db
+
+# Node / Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local
+
+# Env
+.env
+.env.local
+
+# OS
+.DS_Store

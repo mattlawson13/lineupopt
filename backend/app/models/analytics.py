@@ -1,0 +1,78 @@
+"""Ownership, correlation, and simulation output models."""
+from __future__ import annotations
+
+import datetime
+
+from sqlalchemy import JSON, Float, ForeignKey, Integer, String
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.db.base import Base, TimestampMixin, UUIDPk
+
+
+class OwnershipProjection(Base, UUIDPk, TimestampMixin):
+    __tablename__ = "ownership_projections"
+
+    slate_id: Mapped[str] = mapped_column(ForeignKey("slates.id"), index=True)
+    player_id: Mapped[str] = mapped_column(ForeignKey("players.id"), index=True)
+
+    projected_ownership_pct: Mapped[float] = mapped_column(Float)
+    optimal_ownership_pct: Mapped[float | None] = mapped_column(Float, nullable=True)  # % of simulated-optimal lineups featuring this player
+    leverage: Mapped[float | None] = mapped_column(Float, nullable=True)  # optimal% - projected_ownership%
+    chalk_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    contrarian_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    source: Mapped[str] = mapped_column(String(32), default="proprietary_model")  # proprietary_model | market_import
+    feature_breakdown: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class Correlation(Base, UUIDPk, TimestampMixin):
+    __tablename__ = "correlations"
+
+    slate_id: Mapped[str] = mapped_column(ForeignKey("slates.id"), index=True)
+    player_a_id: Mapped[str] = mapped_column(ForeignKey("players.id"), index=True)
+    player_b_id: Mapped[str] = mapped_column(ForeignKey("players.id"), index=True)
+    relationship_type: Mapped[str] = mapped_column(String(32))  # e.g. qb_own_wr, rb_opp_dst
+    correlation: Mapped[float] = mapped_column(Float)
+    is_empirical: Mapped[bool] = mapped_column(default=False)
+    sample_games: Mapped[int] = mapped_column(Integer, default=0)
+    condition: Mapped[dict] = mapped_column(JSON, default=dict)  # e.g. {"high_total": true}
+
+
+class SimulationRun(Base, UUIDPk, TimestampMixin):
+    __tablename__ = "simulations"
+
+    slate_id: Mapped[str] = mapped_column(ForeignKey("slates.id"), index=True)
+    model_version_id: Mapped[str | None] = mapped_column(ForeignKey("model_versions.id"), nullable=True)
+    num_simulations: Mapped[int] = mapped_column(Integer)
+    random_seed: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    started_at: Mapped[datetime.datetime] = mapped_column(
+        default=lambda: datetime.datetime.now(datetime.timezone.utc)
+    )
+    completed_at: Mapped[datetime.datetime | None] = mapped_column(nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="running")  # running|completed|failed
+    settings: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class PlayerSimulationResult(Base, UUIDPk, TimestampMixin):
+    """Aggregated distribution stats per player for a SimulationRun. Raw
+    per-draw arrays are not persisted (too large); they're held in memory /
+    a parquet cache during the run and summarized here — see
+    simulation/monte_carlo.py.
+    """
+
+    __tablename__ = "player_simulation_results"
+
+    simulation_run_id: Mapped[str] = mapped_column(ForeignKey("simulations.id"), index=True)
+    player_id: Mapped[str] = mapped_column(ForeignKey("players.id"), index=True)
+
+    mean: Mapped[float] = mapped_column(Float)
+    median: Mapped[float] = mapped_column(Float)
+    std_dev: Mapped[float] = mapped_column(Float)
+    floor: Mapped[float] = mapped_column(Float)
+    ceiling: Mapped[float] = mapped_column(Float)
+    percentiles: Mapped[dict] = mapped_column(JSON, default=dict)  # {"10": x, "25": x, "50": x, "75": x, "90": x, "95": x, "99": x}
+    prob_3x_salary: Mapped[float] = mapped_column(Float, default=0.0)
+    prob_4x_salary: Mapped[float] = mapped_column(Float, default=0.0)
+    prob_5x_salary: Mapped[float] = mapped_column(Float, default=0.0)
+    prob_6x_salary: Mapped[float] = mapped_column(Float, default=0.0)
+    prob_top1pct: Mapped[float] = mapped_column(Float, default=0.0)
+    prob_top5pct: Mapped[float] = mapped_column(Float, default=0.0)

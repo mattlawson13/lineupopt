@@ -1,0 +1,30 @@
+solver: CBC
+time_limit_seconds: 20
+
+contest_modes:
+  cash:
+    objective_weights: {median: 0.55, floor: 0.35, projection: 0.10, ceiling: 0.0}
+    randomness_pct: 0.0
+  single_entry:
+    objective_weights: {projection: 0.30, ceiling: 0.30, leverage: 0.20, correlation: 0.20}
+    randomness_pct: 3.0
+  small_field_gpp:
+    objective_weights: {ceiling: 0.40, projection: 0.20, correlation: 0.25, leverage: 0.15}
+    randomness_pct: 5.0
+  large_field_gpp:
+    objective_weights: {ceiling: 0.35, leverage: 0.25, uniqueness: 0.15, correlation: 0.15, volatility: 0.10}
+    randomness_pct: 8.0
+
+default_diversification:
+  max_player_exposure_pct: 40.0
+  min_player_exposure_pct: 0.0
+  max_lineup_overlap: 7          # out of 9 roster spots
+  min_unique_players: 2
+  max_team_exposure_pct: 60.0
+  max_qb_exposure_pct: 30.0
+
+stacking:
+  enabled_types: [standard, double_stack, bring_back, game_stack, run_back, naked_qb]
+  default_min_stack_correlation: 0.05
+
+candidate_pool_multiplier: 20    # generate ~20x requested lineups as candidates before portfolio selection

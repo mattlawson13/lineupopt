@@ -1,0 +1,29 @@
+# DraftKings NFL Classic roster construction rules.
+sport: nfl
+contest_type: classic
+salary_cap: 50000
+roster_size: 9
+positions:
+  # slot_name: eligible_player_positions
+  QB:  {eligible: [QB], count: 1}
+  RB:  {eligible: [RB], count: 2}
+  WR:  {eligible: [WR], count: 3}
+  TE:  {eligible: [TE], count: 1}
+  FLEX: {eligible: [RB, WR, TE], count: 1}
+  DST: {eligible: [DST], count: 1}
+constraints:
+  max_players_per_team: 8      # DK allows up to 8 from one team in Classic (soft cap; configurable)
+  min_teams_represented: 2      # DK requires players from at least 2 different games
+  min_games_represented: 2
+---
+sport: nfl
+contest_type: showdown
+salary_cap: 50000
+roster_size: 6
+positions:
+  CPT: {eligible: [QB, RB, WR, TE, DST, K], count: 1, salary_multiplier: 1.5, score_multiplier: 1.5}
+  FLEX: {eligible: [QB, RB, WR, TE, DST, K], count: 5}
+constraints:
+  max_players_per_team: 6
+  min_teams_represented: 1
+  min_games_represented: 1

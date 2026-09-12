@@ -1,0 +1,40 @@
+# Correlation engine configuration. Empirical correlations are computed
+# from historical player_stats when enough paired game samples exist
+# (min_sample_games); otherwise we fall back to the prior below, and the
+# resulting matrix entry is flagged is_empirical=false so the UI/AI never
+# implies more confidence than the data supports.
+min_sample_games: 150
+
+# Prior correlations by relationship type, used as a Bayesian prior that
+# empirical estimates get shrunk toward (shrinkage weight below), and as
+# the fallback when sample size is insufficient.
+priors:
+  qb_own_wr: 0.55
+  qb_own_te: 0.40
+  qb_own_rb: -0.05
+  qb_opp_qb: 0.15          # same-game shootout correlation
+  qb_opp_wr: 0.22          # bring-back correlation
+  qb_opp_te: 0.10
+  rb_own_dst: 0.10
+  rb_opp_dst: -0.20
+  rb_opp_qb: -0.10
+  wr_opp_cb: -0.05          # placeholder until CB-level tracking data exists
+  wr_own_wr: -0.15          # target competition
+  te_own_wr: -0.08
+  k_own_dst: 0.12
+  dst_opp_qb: -0.25
+  dst_opp_offense: -0.30
+
+shrinkage_weight_at_min_sample: 0.5   # blend 50/50 prior vs empirical right at the sample threshold
+shrinkage_full_empirical_at_games: 600
+
+# Conditional multipliers: correlations strengthen/weaken based on game
+# environment. Applied multiplicatively to the base (prior or empirical)
+# correlation for pairs flagged as game-total-sensitive (QB-stack pairs).
+conditional:
+  high_total_threshold: 48.0
+  high_total_multiplier: 1.25
+  low_total_threshold: 40.0
+  low_total_multiplier: 0.75
+  close_spread_threshold: 3.0
+  close_spread_multiplier: 1.10

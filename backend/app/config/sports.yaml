@@ -1,0 +1,15 @@
+sports:
+  nfl:
+    display_name: "NFL"
+    status: active
+    positions: [QB, RB, WR, TE, K, DST]
+    dk_game_type_ids: [1]        # DraftKings' internal NFL game type ids (classic + showdown share sport id; resolved via draft group metadata)
+    scoring_config: dk_scoring_nfl.yaml
+    roster_config: dk_roster_rules_nfl.yaml
+  soccer:
+    display_name: "Soccer"
+    status: scaffold              # architecture present, projections/sim not yet implemented — see sports/soccer/
+    positions: [GK, D, M, F]
+    dk_game_type_ids: []
+    scoring_config: dk_scoring_soccer.yaml
+    roster_config: dk_roster_rules_soccer.yaml

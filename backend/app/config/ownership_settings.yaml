@@ -1,0 +1,28 @@
+# Proprietary ownership model coefficients (used when no market ownership
+# projection has been imported for the slate). This is a transparent,
+# hand-tunable linear-in-features model, not a black box — see
+# ownership/model.py. Coefficients are on standardized (z-scored) features.
+features:
+  value_zscore: 0.30            # (projection / salary*1000) vs slate mean
+  projection_rank_pct: 0.25     # percentile rank of median projection at position
+  salary_tier: -0.10            # higher salary suppresses ownership slightly, all else equal
+  implied_team_total_zscore: 0.20
+  favorite_zscore: 0.10         # more negative spread (bigger favorite) -> more ownership for skill positions
+  recent_performance_zscore: 0.15
+  popularity_prior: 0.10        # optional manual "public appeal" prior, defaults to 0
+  injury_penalty: -0.35         # applied per injury-status severity tier
+  chalk_narrative_bonus: 0.08   # e.g. "obvious" game stack, best value at position
+
+intercept_by_position:
+  QB: 0.09
+  RB: 0.13
+  WR: 0.11
+  TE: 0.08
+  K: 0.06
+  DST: 0.10
+
+# Ownership within a position on a slate is renormalized to sum to
+# roughly (roster_slots_at_position * field_size_assumption).
+normalize_to_roster_slots: true
+min_ownership_pct: 0.1
+max_ownership_pct: 75.0

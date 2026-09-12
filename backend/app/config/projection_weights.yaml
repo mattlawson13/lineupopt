@@ -1,0 +1,30 @@
+# Ensemble weighting for combining projection sources into a single
+# consensus projection. Weights are renormalized over whichever sources
+# actually have data for a given player (missing sources don't zero out
+# the player — they just drop from the weighted average).
+#
+# model_projection = our proprietary component-based model (projections/nfl/*)
+# market_projection = derived from betting lines (implied team total shares)
+ensemble_weights:
+  model_projection: 0.45
+  market_projection: 0.15
+  source_projection_1: 0.15   # e.g. manually-imported FantasyPros consensus
+  source_projection_2: 0.15   # e.g. manually-imported RotoGrinders/other
+  source_projection_3: 0.10   # e.g. manually-imported additional source
+
+# Per-source confidence multipliers applied before weighting, in [0, 1].
+# Lets a stale or thin source count for less without changing base weights.
+default_source_confidence: 0.85
+
+# How much recent usage should be weighted vs season-long usage when
+# building the "usage" feature that feeds the model.
+usage_recency:
+  last_1_game_weight: 0.45
+  last_3_game_weight: 0.35
+  season_weight: 0.20
+  min_games_for_full_recency_weight: 3
+
+# Shrinkage applied to small-sample usage rates (Bayesian shrinkage toward
+# positional mean) to avoid overreacting to 1-game spikes.
+usage_shrinkage:
+  prior_games: 2.0

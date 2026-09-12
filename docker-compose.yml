@@ -1,0 +1,35 @@
+version: "3.9"
+
+# Local dev stack: Postgres + Redis. The backend/frontend themselves run
+# outside Docker by default (see README "Running locally") since that's
+# faster to iterate on; point DATABASE_URL/REDIS_URL at these services
+# when you want Postgres instead of the zero-setup SQLite default.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: lineupopt
+      POSTGRES_PASSWORD: lineupopt
+      POSTGRES_DB: lineupopt
+    ports:
+      - "5432:5432"
+    volumes:
+      - lineupopt_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lineupopt"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  lineupopt_postgres_data:

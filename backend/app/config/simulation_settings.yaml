@@ -1,0 +1,36 @@
+default_simulation_count: 10000
+max_simulation_count: 50000
+random_seed: null   # null = non-deterministic; set an int for reproducible runs
+
+# Game-script scenario buckets and their approximate unconditional
+# probabilities before conditioning on Vegas spread/total for a given game.
+# These get re-weighted per game using the spread/total (see
+# simulation/game_sim.py:scenario_probabilities).
+game_scripts:
+  - name: close_high_scoring
+    base_probability: 0.18
+  - name: home_blowout
+    base_probability: 0.14
+  - name: away_blowout
+    base_probability: 0.14
+  - name: low_scoring
+    base_probability: 0.16
+  - name: competitive_shootout
+    base_probability: 0.20
+  - name: defensive_game
+    base_probability: 0.18
+
+# Variance parameters for player-level simulation draws around the
+# game-script-conditioned mean. Distribution family + coefficient of
+# variation (stdev / mean) by position, used when we don't yet have
+# enough historical data to fit an empirical distribution.
+player_variance:
+  QB:  {distribution: gamma, cv: 0.34}
+  RB:  {distribution: gamma, cv: 0.48}
+  WR:  {distribution: gamma, cv: 0.58}
+  TE:  {distribution: gamma, cv: 0.62}
+  K:   {distribution: gamma, cv: 0.45}
+  DST: {distribution: gamma, cv: 0.65}
+
+percentiles: [10, 25, 50, 75, 90, 95, 99]
+salary_multiplier_targets: [3, 4, 5, 6]

@@ -1,0 +1,49 @@
+# DraftKings NFL Classic scoring rules.
+# Source of truth: DraftKings public NFL scoring rules page.
+# Keep this data-only — code should never hardcode these numbers.
+sport: nfl
+contest_type: classic
+scoring:
+  passing_yard: 0.04            # 1 pt per 25 yards
+  passing_td: 4.0
+  interception_thrown: -1.0
+  passing_yard_bonus:
+    threshold: 300
+    bonus: 3.0
+  rushing_yard: 0.1              # 1 pt per 10 yards
+  rushing_td: 6.0
+  rushing_yard_bonus:
+    threshold: 100
+    bonus: 3.0
+  reception: 1.0                 # full PPR
+  receiving_yard: 0.1
+  receiving_td: 6.0
+  receiving_yard_bonus:
+    threshold: 100
+    bonus: 3.0
+  fumble_lost: -1.0
+  two_point_conversion: 2.0
+  offensive_fumble_recovery_td: 6.0
+  punt_kick_return_td: 6.0
+  # Kicker
+  fg_made_0_39: 3.0
+  fg_made_40_49: 4.0
+  fg_made_50_plus: 5.0
+  fg_missed: -1.0
+  xp_made: 1.0
+  # DST
+  dst_sack: 1.0
+  dst_interception: 2.0
+  dst_fumble_recovery: 2.0
+  dst_touchdown: 6.0
+  dst_safety: 2.0
+  dst_blocked_kick: 2.0
+  dst_return_td: 6.0
+  dst_points_allowed:
+    - {max_points: 0, bonus: 10.0}
+    - {max_points: 6, bonus: 7.0}
+    - {max_points: 13, bonus: 4.0}
+    - {max_points: 20, bonus: 1.0}
+    - {max_points: 27, bonus: 0.0}
+    - {max_points: 34, bonus: -1.0}
+    - {max_points: 999, bonus: -4.0}

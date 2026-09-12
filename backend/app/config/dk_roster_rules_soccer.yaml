@@ -1,0 +1,15 @@
+# SCAFFOLD — see dk_scoring_soccer.yaml note.
+sport: soccer
+contest_type: classic
+salary_cap: 50000
+roster_size: 8
+positions:
+  GK: {eligible: [GK], count: 1}
+  D:  {eligible: [D], count: 2}
+  M:  {eligible: [M], count: 3}
+  F:  {eligible: [F], count: 1}
+  FLEX: {eligible: [D, M, F], count: 1}
+constraints:
+  max_players_per_team: 4
+  min_teams_represented: 3
+  min_games_represented: 2

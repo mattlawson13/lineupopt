@@ -1,0 +1,27 @@
+# DraftKings Soccer scoring rules (Fantasy Premier League style contests).
+# SCAFFOLD: values are DK's published Soccer classic scoring; the soccer
+# projection/simulation engine that would consume these is not yet built
+# (see sports/soccer/). Kept here so the config-driven pattern is already
+# correct when that work starts — never hardcode these in code.
+sport: soccer
+contest_type: classic
+scoring:
+  goal_gk_def: 10.0
+  goal_mid: 9.0
+  goal_fwd: 8.0
+  assist: 5.0
+  shot_on_target: 0.5
+  key_pass: 0.5
+  chance_created: 0.3
+  successful_cross: 0.2
+  tackle_won: 0.2
+  interception: 0.2
+  clean_sheet_gk_def: 6.0
+  clean_sheet_mid: 1.0
+  save: 0.5
+  penalty_save: 6.0
+  goal_conceded_2plus_gk_def: -0.5
+  yellow_card: -1.0
+  red_card: -3.0
+  own_goal: -3.0
+  penalty_miss: -3.0
