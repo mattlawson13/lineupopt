@@ -477,16 +477,17 @@ def _load_depth_chart_ranks(season: int) -> tuple[dict[tuple[str, str], int], se
     `_depth_chart_multiplier`.
     """
     try:
+        # get_depth_chart() already stream-parses down to just the latest
+        # snapshot (see its docstring) — no further date filtering needed.
         df = NFLStatsSource().get_depth_chart(season).data
     except SourceUnavailableError as exc:
         return {}, set(), f"Depth chart unavailable — cannot distinguish current starters from backups: {exc}"
     if df.empty:
         return {}, set(), "Depth chart empty"
 
-    latest = df[df["dt"] == df["dt"].max()]
     ranks: dict[tuple[str, str], int] = {}
     covered: set[tuple[str, str]] = set()
-    for _, row in latest.iterrows():
+    for _, row in df.iterrows():
         position = NFL_POSITION_MAP.get(row["pos_abb"])
         if not position or not isinstance(row["team"], str):
             continue
