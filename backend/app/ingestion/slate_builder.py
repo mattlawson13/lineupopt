@@ -16,6 +16,7 @@ import logging
 from typing import Iterator
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.correlations.engine import CorrelationEntry, CorrelationPlayer, build_correlation_matrix
@@ -108,7 +109,7 @@ def run_build_slate(
     # ---- 2. Persist teams/games/players/slate --------------------------
     yield BuildProgressEvent("persist_entities", "running", "Normalizing players/teams/games...")
     slate, dk_player_rows, team_by_abbrev, game_by_teams = _persist_slate_entities(db, dk_slate, run_id)
-    db.flush()
+    db.commit()
     yield BuildProgressEvent(
         "persist_entities", "success",
         f"{len(team_by_abbrev)} teams, {len(game_by_teams)} games, {len(dk_player_rows)} DK player rows",
@@ -137,6 +138,7 @@ def run_build_slate(
         yield BuildProgressEvent("injuries", "warning", injury_warning)
     else:
         yield BuildProgressEvent("injuries", "success", f"{len(injury_by_norm_name)} injury designations loaded")
+    db.commit()  # release the write lock before the slow external nflverse fetch below
 
     # ---- 6. Historical usage / matchup data --------------------------------
     yield BuildProgressEvent("historical_stats", "running", "Loading historical usage data (nflverse)...")
@@ -162,16 +164,19 @@ def run_build_slate(
         injury_by_norm_name, game_logs, matchup_zscores, model_version,
     )
     yield BuildProgressEvent("projections", "success", f"Ensemble projections built for {len(ensemble_by_player_id)} players")
+    db.commit()
 
     # ---- 8. Ownership --------------------------------------------------------
     yield BuildProgressEvent("ownership", "running", "Projecting ownership...")
     ownership_by_player_id = _build_ownership(db, slate, dk_player_rows, ensemble_by_player_id, game_env_by_game_id, injury_by_norm_name)
     yield BuildProgressEvent("ownership", "success", f"Ownership projected for {len(ownership_by_player_id)} players")
+    db.commit()
 
     # ---- 9. Correlations -------------------------------------------------
     yield BuildProgressEvent("correlations", "running", "Building correlation matrix...")
     correlation_entries = _build_correlations(db, slate, dk_player_rows, game_env_by_game_id)
     yield BuildProgressEvent("correlations", "success", f"{len(correlation_entries)} pairwise correlations computed")
+    db.commit()
 
     # ---- 10. Monte Carlo simulation ---------------------------------------
     yield BuildProgressEvent("simulation", "running", f"Running {options.num_simulations:,} simulations...")
@@ -182,6 +187,7 @@ def run_build_slate(
         "simulation", "success",
         f"{sim_result.num_simulations:,} simulations completed in {sim_result.duration_seconds}s",
     )
+    db.commit()
 
     # ---- 11. Optimize lineups ------------------------------------------------
     yield BuildProgressEvent("optimize", "running", f"Generating {options.num_lineups} lineups...")
@@ -190,6 +196,7 @@ def run_build_slate(
         game_env_by_game_id,
     )
     yield BuildProgressEvent("optimize", "success", f"{len(lineups)} lineups generated")
+    db.commit()
 
     # ---- 12. AI-rank / explain --------------------------------------------
     yield BuildProgressEvent("ai_rank", "running", "Ranking and explaining lineups...")
@@ -237,7 +244,17 @@ def _persist_slate_entities(db: Session, dk_slate: DraftKingsSlate, run_id: str)
             imported_at=now,
         )
         db.add(slate)
-        db.flush()
+        try:
+            db.flush()
+        except IntegrityError:
+            # Two builds for the same draft group started at almost the
+            # same instant (e.g. a double-tap) — the other one won the
+            # race on the dk_draft_group_id unique constraint. Fall back
+            # to using its row instead of erroring out.
+            db.rollback()
+            slate = db.execute(
+                select(Slate).where(Slate.dk_draft_group_id == dk_slate.dk_draft_group_id)
+            ).scalar_one()
 
     team_by_abbrev: dict[str, Team] = {}
     game_by_teams: dict[tuple[str, str], Game] = {}
