@@ -40,8 +40,12 @@ export default function BuildSlatePanel({
   onComplete: (slateId: string) => void;
 }) {
   const [draftGroupId, setDraftGroupId] = useState("");
-  const [numSims, setNumSims] = useState(10000);
-  const [numLineups, setNumLineups] = useState(20);
+  // Conservative defaults for a free-tier (512MB) backend host — a full
+  // main slate has ~750 relevant players, and 10k sims x 20 lineups got
+  // an actual deployed instance OOM-killed. Still editable — raise these
+  // if/when the backend has more memory to work with.
+  const [numSims, setNumSims] = useState(3000);
+  const [numLineups, setNumLineups] = useState(10);
   const [objective, setObjective] = useState("large_field_gpp");
   const [events, setEvents] = useState<BuildProgressEvent[]>([]);
   const [building, setBuilding] = useState(false);
