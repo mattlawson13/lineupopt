@@ -1,0 +1,29 @@
+databases:
+  - name: lineupopt-db
+    plan: free
+
+services:
+  - name: lineupopt-backend
+    type: web
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: lineupopt-db
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      # Optional — leave unset to run without them (the app degrades
+      # gracefully; see README "Data sources"). Set these in the Render
+      # dashboard after the first deploy if/when you have them.
+      - key: ODDS_API_KEY
+        sync: false
+      - key: FANTASYPROS_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false

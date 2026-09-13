@@ -15,10 +15,13 @@ app = FastAPI(title="LineupOpt", description="DraftKings DFS projection, simulat
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
-    # Also allow dev-tunnel origins (localtunnel/ngrok — used to expose the
-    # local dev server to a phone for testing) — narrow to these specific
-    # host patterns rather than a blanket wildcard.
-    allow_origin_regex=r"https://.*\.(loca\.lt|ngrok-free\.app|ngrok\.app|ngrok\.io)",
+    # Also allow dev-tunnel origins (localtunnel/ngrok) and the deployed
+    # Vercel frontend — narrow to these specific host patterns rather than
+    # a blanket wildcard. In the deployed setup the browser normally only
+    # ever talks to the Vercel origin (Next.js proxies /api server-side —
+    # see frontend/next.config.js), so this mainly matters if the backend
+    # is ever called directly.
+    allow_origin_regex=r"https://.*\.(loca\.lt|ngrok-free\.app|ngrok\.app|ngrok\.io|vercel\.app)",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
