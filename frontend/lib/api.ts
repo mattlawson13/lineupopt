@@ -1,4 +1,9 @@
-export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+// Empty string = relative to this app's own origin, proxied server-side to
+// the backend via next.config.js's rewrites() — this is what lets the app
+// work correctly whether it's opened as localhost or through a public
+// tunnel (ngrok etc.), without exposing the backend itself. Set
+// NEXT_PUBLIC_API_BASE_URL to override with an absolute URL if needed.
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "";
 
 export interface Slate {
   id: string;
