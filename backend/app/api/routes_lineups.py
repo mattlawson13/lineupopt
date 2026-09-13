@@ -17,7 +17,8 @@ from app.api.serialize import serialize_lineup
 from app.config.loader import get_optimization_settings
 from app.ingestion.slate_builder import _compute_correlation_scores
 from app.models.analytics import Correlation, OwnershipProjection, PlayerSimulationResult, SimulationRun
-from app.models.core import Player
+from app.models.context_data import BettingLine
+from app.models.core import Game, Player
 from app.models.lineup import Lineup, LineupPlayer, OptimizationRun
 from app.models.projections import EnsembleProjection
 from app.models.slate import DraftKingsPlayer, Slate
@@ -131,9 +132,34 @@ def generate_lineups(req: ManualOptimizeRequest, db: Session = Depends(get_db)):
     db.add(opt_run)
     db.flush()
 
+    # Same forced-stack rotation the main build pipeline uses (spec
+    # section 16) — without this, this manual/filtered regenerate path
+    # leaves stacking to emerge from the correlation objective weight
+    # alone, which reliably under-selects it and produces "naked QB"
+    # lineups (no correlated pass-catcher at all) even in GPP modes.
+    stack_teams: list[str] | None = None
+    if weights.get("correlation", 0) > 0:
+        game_ids = {row.game_id for row in dk_rows if row.game_id}
+        betting_lines = {
+            bl.game_id: bl for bl in db.execute(select(BettingLine).where(BettingLine.game_id.in_(game_ids))).scalars().all()
+        }
+        games_by_id = {g.id: g for g in db.execute(select(Game).where(Game.id.in_(game_ids))).scalars().all()}
+        team_totals: dict[str, float] = {}
+        for row in dk_rows:
+            if row.dk_position != "QB" or not row.game_id or row.player_id not in ensembles:
+                continue
+            bl = betting_lines.get(row.game_id)
+            game = games_by_id.get(row.game_id)
+            if not bl or not game:
+                continue
+            is_home = game.home_team.abbreviation == row.team_abbreviation
+            team_totals[row.team_abbreviation] = bl.implied_total_home if is_home else bl.implied_total_away
+        stack_teams = [t for t, _ in sorted(team_totals.items(), key=lambda kv: kv[1], reverse=True)] or None
+
     portfolio = generate_portfolio(
         optimizer_players, rules, req.num_lineups, diversification,
         forced_team_min_counts=req.forced_team_min_counts or None,
+        forced_qb_stack_teams=stack_teams,
         randomness_pct=mode_cfg.get("randomness_pct", 0.0), seed=req.seed,
     )
 
