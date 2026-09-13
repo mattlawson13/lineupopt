@@ -20,7 +20,7 @@ from app.models.analytics import Correlation, OwnershipProjection, PlayerSimulat
 from app.models.context_data import BettingLine
 from app.models.core import Game, Player
 from app.models.lineup import Lineup, LineupPlayer, OptimizationRun
-from app.models.projections import EnsembleProjection
+from app.models.projections import EnsembleProjection, Projection
 from app.models.slate import DraftKingsPlayer, Slate
 from app.optimization.diversification import DiversificationSettings, generate_portfolio
 from app.optimization.dk_rules import get_contest_rules
@@ -70,6 +70,13 @@ def generate_lineups(req: ManualOptimizeRequest, db: Session = Depends(get_db)):
 
     dk_rows = db.execute(select(DraftKingsPlayer).where(DraftKingsPlayer.slate_id == req.slate_id)).scalars().all()
     ensembles = {e.player_id: e for e in db.execute(select(EnsembleProjection).where(EnsembleProjection.slate_id == req.slate_id)).scalars().all()}
+    # Ordered ascending so the LATEST build's row wins — see the same
+    # pattern in get_slate_players() (routes_slates.py) for why (a
+    # rebuilt slate leaves earlier Projection rows in place).
+    depth_multipliers = {
+        p.player_id: p.inputs.get("depth_chart_multiplier", 1.0)
+        for p in db.execute(select(Projection).where(Projection.slate_id == req.slate_id).order_by(Projection.created_at)).scalars().all()
+    }
     ownerships = {o.player_id: o for o in db.execute(select(OwnershipProjection).where(OwnershipProjection.slate_id == req.slate_id)).scalars().all()}
     latest_sim = db.execute(
         select(SimulationRun).where(SimulationRun.slate_id == req.slate_id).order_by(SimulationRun.completed_at.desc())
@@ -105,11 +112,18 @@ def generate_lineups(req: ManualOptimizeRequest, db: Session = Depends(get_db)):
         sim = sim_by_player.get(row.player_id)
         own_pct = own.projected_ownership_pct if own else 10.0
         leverage_proxy = max(0.0, (sim.prob_top5pct * 100 if sim else 0) - own_pct)
+        # See the matching comment in slate_builder.py's _optimize_lineups:
+        # the correlation matrix doesn't know about depth-chart status, so
+        # this term needs the same backup discount everything else already
+        # gets implicitly through ens.*/sim.* being built off a discounted
+        # projection — otherwise a cheap backup QB's objective_value gets
+        # inflated purely from being "connected" to many teammates.
+        depth_multiplier = depth_multipliers.get(row.player_id, 1.0)
         objective_value = (
             weights.get("median", 0) * ens.median + weights.get("projection", 0) * ens.ensemble_projection
             + weights.get("ceiling", 0) * (sim.ceiling if sim else ens.ceiling) + weights.get("floor", 0) * ens.floor
             + weights.get("leverage", 0) * leverage_proxy + weights.get("volatility", 0) * (sim.std_dev if sim else ens.std_dev)
-            + weights.get("correlation", 0) * correlation_scores.get(row.player_id, 0.0) * CORRELATION_SCALE
+            + weights.get("correlation", 0) * correlation_scores.get(row.player_id, 0.0) * CORRELATION_SCALE * depth_multiplier
         )
         salary = row.salaries[-1].salary if row.salaries else 0
         optimizer_players.append(OptimizerPlayer(

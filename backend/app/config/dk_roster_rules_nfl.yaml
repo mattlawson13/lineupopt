@@ -24,6 +24,6 @@ positions:
   CPT: {eligible: [QB, RB, WR, TE, DST, K], count: 1, salary_multiplier: 1.5, score_multiplier: 1.5}
   FLEX: {eligible: [QB, RB, WR, TE, DST, K], count: 5}
 constraints:
-  max_players_per_team: 6
-  min_teams_represented: 1
+  max_players_per_team: 5       # DK requires players from both teams — with only 6 roster spots and 2 teams, that caps any one team at 5
+  min_teams_represented: 2      # unlike Classic, min_games_represented is a no-op here (always exactly 1 game) — this is the constraint that actually enforces "both teams"
   min_games_represented: 1

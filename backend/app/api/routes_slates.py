@@ -22,6 +22,12 @@ def list_slates(db: Session = Depends(get_db)):
     return [serialize_slate(s) for s in slates]
 
 
+_SUPPORTED_DK_GAME_TYPES = {
+    "Classic": "classic",
+    "Showdown Captain Mode": "showdown",
+}
+
+
 @router.get("/available")
 def list_available_dk_slates():
     """Live DraftKings NFL contest lobby, collapsed into one row per DK
@@ -32,6 +38,13 @@ def list_available_dk_slates():
     by dk_draft_group_id, using whichever contest in the group has the
     largest total prize pool as the representative name (typically the
     flagship GPP, which is the one a person actually recognizes).
+
+    Includes both Classic (9-man salary-cap) and Showdown Captain Mode
+    (single-game, CPT + 5 FLEX) slates — the optimizer supports both
+    roster formats (see dk_rules.py / dk_roster_rules_nfl.yaml). Excludes
+    the other game types DK's NFL lobby also mixes in (Snake Showdown,
+    Single Stat, In-Game, Madden, Best Ball, ...), which use fundamentally
+    different formats this app doesn't build for.
     """
     try:
         result = DraftKingsApiSource().get_nfl_contests()
@@ -40,16 +53,15 @@ def list_available_dk_slates():
 
     by_group: dict[str, dict] = {}
     for c in result.data:
-        if c.game_type != "Classic":
-            # Everything else (Showdown, Snake Showdown, Single Stat, In-
-            # Game, Madden Classic, Best Ball, ...) uses a different
-            # roster format this app's optimizer isn't built for.
+        contest_format = _SUPPORTED_DK_GAME_TYPES.get(c.game_type)
+        if not contest_format:
             continue
         start_iso = c.start_time_utc.isoformat()
         group = by_group.get(c.dk_draft_group_id)
         if group is None:
             group = {
                 "dk_draft_group_id": c.dk_draft_group_id,
+                "contest_format": contest_format,
                 "start_time_utc": start_iso,
                 "contest_count": 0,
                 "sample_contest_name": c.name,

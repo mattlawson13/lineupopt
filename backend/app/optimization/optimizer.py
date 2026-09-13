@@ -163,6 +163,22 @@ def optimize_single_lineup(
                 prob += pulp.lpSum(game_vars) <= len(game_vars) * game_indicator[g]
         prob += pulp.lpSum(game_indicator.values()) >= rules.min_games_represented
 
+    # Min distinct teams represented. This is a separate constraint from
+    # min_games_represented above rather than redundant with it: in
+    # Showdown, every player shares the same single game_id (one game on
+    # the whole slate), so the games constraint is trivially satisfied
+    # however the lineup is built and can never stop a lineup from being
+    # drafted entirely off one team — that's exactly what this enforces
+    # (DK requires both teams to be represented in Showdown).
+    if len(teams) >= rules.min_teams_represented:
+        team_indicator = {t: pulp.LpVariable(f"team_used_{t}", cat="Binary") for t in teams}
+        for t in teams:
+            t_vars = [var for (pid, slot), var in x.items() if next(pp.team for pp in pool if pp.player_id == pid) == t]
+            if t_vars:
+                prob += pulp.lpSum(t_vars) >= team_indicator[t]
+                prob += pulp.lpSum(t_vars) <= len(t_vars) * team_indicator[t]
+        prob += pulp.lpSum(team_indicator.values()) >= rules.min_teams_represented
+
     # Diversification: overlap cap against previously generated lineups
     if exclude_lineups and max_overlap is not None:
         for i, prev in enumerate(exclude_lineups):

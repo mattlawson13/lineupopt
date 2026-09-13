@@ -11,7 +11,8 @@ function formatSlateLabel(s: AvailableDkSlate): string {
     minute: "2-digit",
     timeZoneName: "short",
   });
-  return `${when} — ${s.sample_contest_name} (${s.contest_count} contests)`;
+  const formatTag = s.contest_format === "showdown" ? "[Showdown] " : "";
+  return `${formatTag}${when} — ${s.sample_contest_name} (${s.contest_count} contests)`;
 }
 
 const STEP_LABELS: Record<string, string> = {

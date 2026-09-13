@@ -2,7 +2,11 @@
 
 import { Lineup } from "@/lib/api";
 
-const SLOT_ORDER = ["QB", "RB", "WR", "TE", "FLEX", "DST", "CPT"];
+// CPT first (Showdown's premium slot leads on DK's own UI); FLEX last so
+// Classic's own FLEX doesn't collide with Showdown's 5 FLEX slots — both
+// formats sort correctly through this one list since roster_slot values
+// never overlap between the two (QB/RB/WR/TE/DST vs CPT/FLEX).
+const SLOT_ORDER = ["CPT", "QB", "RB", "WR", "TE", "DST", "FLEX"];
 
 export default function LineupsPanel({ lineups }: { lineups: Lineup[] }) {
   if (!lineups.length) {

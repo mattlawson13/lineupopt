@@ -634,7 +634,7 @@ def _build_projections(
 
         ensemble_by_player_id[player.id] = {
             "ensemble": ensemble, "component": component, "dk_row": dk_row, "is_home": is_home,
-            "env": env, "injury_status": injury_status,
+            "env": env, "injury_status": injury_status, "depth_chart_multiplier": depth_multiplier,
         }
         why_panels[player.id] = build_why_panel(component, ensemble)
 
@@ -800,13 +800,27 @@ def _optimize_lineups(db, slate, dk_player_rows, ensemble_by_player_id, ownershi
         own_pct = own.projected_ownership_pct if own else 10.0
         leverage_proxy = max(0.0, (sim.prob_top5pct * 100 if sim else 0) - own_pct)
 
+        # The correlation matrix has no concept of depth-chart status — a
+        # 4th-string QB gets the exact same "qb_own_wr" correlation value
+        # against his team's receivers as the actual starter (see
+        # correlations/engine.py). Every OTHER term here is already
+        # implicitly discounted for backups (ens.*/sim.* are computed from
+        # a projection that's already scaled by depth_chart_multiplier),
+        # so leaving this one term undiscounted let a cheap, correlation-
+        # rich backup QB's objective_value get inflated purely from being
+        # "connected" to many teammates — invisible in Classic (only 1 QB
+        # slot exists) but very visible in Showdown, where nothing stops
+        # the optimizer from rostering several backup QBs in open FLEX
+        # slots once this term dominates their otherwise-correct discount.
+        depth_multiplier = info.get("depth_chart_multiplier", 1.0)
+
         objective_value = (
             weights.get("median", 0) * ens.median
             + weights.get("projection", 0) * ens.ensemble_projection
             + weights.get("ceiling", 0) * (sim.ceiling if sim else ens.ceiling)
             + weights.get("floor", 0) * ens.floor
             + weights.get("leverage", 0) * leverage_proxy
-            + weights.get("correlation", 0) * correlation_scores.get(r.player_id, 0.0) * CORRELATION_SCALE
+            + weights.get("correlation", 0) * correlation_scores.get(r.player_id, 0.0) * CORRELATION_SCALE * depth_multiplier
             + weights.get("uniqueness", 0) * 0  # uniqueness is enforced structurally via exposure/overlap constraints in diversification.py, not a per-player scalar
             + weights.get("volatility", 0) * (sim.std_dev if sim else ens.std_dev)
         )

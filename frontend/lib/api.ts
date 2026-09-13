@@ -13,6 +13,7 @@ export const API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL || "").replace(/\/
 
 export interface AvailableDkSlate {
   dk_draft_group_id: string;
+  contest_format: "classic" | "showdown";
   start_time_utc: string;
   contest_count: number;
   sample_contest_name: string;

@@ -142,9 +142,41 @@ class DraftKingsApiSource(DataSource):
                 f"DraftKings draftables endpoint unreachable for group {dk_draft_group_id}: {exc}"
             ) from exc
 
+        # Showdown (Captain Mode) draft groups list every player TWICE —
+        # once priced for the CPT slot (1.5x salary) and once at base
+        # price for FLEX — sharing the same playerDkId but different
+        # draftableId/rosterSlotId. Verified live 2026-09-13 (dg=153085,
+        # SNF Showdown): e.g. CeeDee Lamb at $16,200 (rosterSlotId 511)
+        # and $10,800 (rosterSlotId 512) — exactly 1.5x apart. Classic
+        # slates also duplicate some players (an explicit FLEX-eligible
+        # row alongside their primary-position row), but at the *same*
+        # salary both times, so the ratio test below only fires for real
+        # Showdown pricing. We only need the base (lower) price per
+        # player — the optimizer already applies the 1.5x CPT multiplier
+        # itself (see dk_rules.py's showdown CPT salary_multiplier), so
+        # keeping the CPT-priced duplicate would just double-count it.
+        raw_draftables = payload.get("draftables", [])
+        by_player: dict[str, list[dict]] = {}
+        for raw in raw_draftables:
+            pid = raw.get("playerDkId")
+            if pid is not None:
+                by_player.setdefault(str(pid), []).append(raw)
+
+        is_showdown = False
+        chosen_raws: list[dict] = []
+        for pid, raws in by_player.items():
+            if len(raws) >= 2:
+                by_salary = sorted(raws, key=lambda r: r.get("salary", 0))
+                lo, hi = by_salary[0].get("salary", 0), by_salary[-1].get("salary", 0)
+                if lo > 0 and abs(hi / lo - 1.5) < 0.01:
+                    is_showdown = True
+                    chosen_raws.append(by_salary[0])
+                    continue
+            chosen_raws.append(raws[0])
+
         rows: list[DraftKingsPlayerRow] = []
         warnings: list[str] = []
-        for raw in payload.get("draftables", []):
+        for raw in chosen_raws:
             try:
                 comp = raw.get("competition") or {}
                 team_abbrev = raw.get("teamAbbreviation", "")
@@ -179,7 +211,10 @@ class DraftKingsApiSource(DataSource):
                 f"DraftKings draftables returned zero usable players for group {dk_draft_group_id}"
             )
 
-        slate = DraftKingsSlate(dk_draft_group_id=str(dk_draft_group_id), players=rows)
+        slate = DraftKingsSlate(
+            dk_draft_group_id=str(dk_draft_group_id), players=rows,
+            contest_type="showdown" if is_showdown else "classic",
+        )
         return self._result(slate, warnings=warnings, raw_meta={"from_cache": from_cache, "player_count": len(rows)})
 
 
