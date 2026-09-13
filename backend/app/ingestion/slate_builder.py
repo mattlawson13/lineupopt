@@ -28,7 +28,7 @@ from app.data_sources.nfl_stats import NFLStatsSource
 from app.data_sources.weather import WeatherSource
 from app.features.game_environment import compute_game_environment
 from app.features.matchup import compute_matchup_zscores
-from app.features.nflverse_adapter import NFL_POSITION_MAP, build_fpts_allowed_by_team_position, build_game_logs_by_player
+from app.features.nflverse_adapter import build_fpts_allowed_by_team_position, build_game_logs_by_player
 from app.features.usage_features import compute_usage_snapshot
 from app.models.core import Game, Player, Team
 from app.models.enums import InjuryStatus
@@ -459,6 +459,20 @@ def _load_historical_stats(season: int, week: int) -> tuple[dict, dict, str | No
 _UNLISTED_DEPTH_RANK = 99  # sentinel: on the roster, but not on the tracked depth chart at all
 
 
+_DEPTH_CHART_POSITION_MAP = {"QB": "QB", "RB": "RB", "WR": "WR", "TE": "TE"}
+# Deliberately NOT the same as NFL_POSITION_MAP (features/nflverse_adapter.py),
+# which folds FB into RB — correct for aggregating a fullback's rushing/
+# receiving stats into the RB *usage* model, but wrong here: depth charts
+# track FB as its own position group with its own independent rank
+# ordering, so a fullback who happens to be "FB rank 1" (often literally
+# the only fullback on the roster) is not the same thing as "RB rank 1" —
+# treating it as such gave a real fullback (0-2 touches/game) the same
+# undiscounted "starter" multiplier as the actual featured back. Excluding
+# FB here means a fullback finds no RB-group rank and correctly falls into
+# the "not ranked, but the position IS covered" branch in
+# _promote_for_injuries, landing on the RB floor discount instead.
+
+
 def _load_depth_chart_ranks(season: int) -> tuple[dict[tuple[str, str], int], set[tuple[str, str]], str | None]:
     """(normalized_name, position) -> current depth-chart rank (1 = starter),
     from nflverse's most recent depth-chart snapshot, plus the set of
@@ -488,7 +502,7 @@ def _load_depth_chart_ranks(season: int) -> tuple[dict[tuple[str, str], int], se
     ranks: dict[tuple[str, str], int] = {}
     covered: set[tuple[str, str]] = set()
     for _, row in df.iterrows():
-        position = NFL_POSITION_MAP.get(row["pos_abb"])
+        position = _DEPTH_CHART_POSITION_MAP.get(row["pos_abb"])
         if not position or not isinstance(row["team"], str):
             continue
         team_abbrev = normalize_team_abbreviation(row["team"])
