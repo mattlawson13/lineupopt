@@ -84,11 +84,10 @@ def _metrics(rows: list[BacktestRow]) -> GroupMetrics:
 
 def run_backtest(season: int, weeks: list[int]) -> tuple[list[BacktestRow], BacktestSummary]:
     try:
-        df = NFLStatsSource().get_player_stats(min_season=season).data
+        df_season = NFLStatsSource().get_player_stats(season).data
     except SourceUnavailableError as exc:
         raise RuntimeError(f"Cannot backtest — nflverse unavailable: {exc}") from exc
 
-    df_season = df[df["season"] == season]
     if df_season.empty:
         raise RuntimeError(f"No nflverse data for season {season}")
 

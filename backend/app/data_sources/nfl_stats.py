@@ -1,8 +1,13 @@
 """NFL historical/statistical data adapter — nflverse-data (FREE, public
-GitHub release assets, no API key). Verified live 2026-09-12:
+GitHub release assets, no API key). Verified live 2026-09-12/13:
 
   - schedules/games.csv
-  - player_stats/player_stats.csv
+  - player_stats/player_stats_{season}.csv  (per-season; ~5.5MB for one
+    season, vs. ~125MB in memory for the combined 1999-present file —
+    that combined file is also served at player_stats/player_stats.csv,
+    but we deliberately never touch it: parsing it peaks well over
+    Render's free-tier 512MB limit even before any filtering, which is
+    what actually OOM-killed a live deployment)
   - rosters/roster_{season}.csv
   - weekly_rosters/roster_weekly_{season}.csv
   - depth_charts/depth_charts_{season}.csv
@@ -50,16 +55,14 @@ class NFLStatsSource(DataSource):
         df, from_cache = self._get_csv("schedules", "games.csv", cache_ttl_seconds=3600)
         return self._result(df, raw_meta={"from_cache": from_cache, "rows": len(df)})
 
-    def get_player_stats(self, min_season: int | None = None) -> SourceResult[pd.DataFrame]:
-        """`min_season`, when given, drops older seasons immediately after
-        parsing. The full file spans 1999-present (~125MB in memory as a
-        DataFrame); callers almost always only need the current/recent
-        season(s), and holding the whole history in memory is what pushed
-        a 512MB Render instance over its limit during a live slate build.
+    def get_player_stats(self, season: int) -> SourceResult[pd.DataFrame]:
+        """One season's stats only (~5.5MB). Raises SourceUnavailableError
+        if nflverse hasn't published this season's file yet (e.g. it's the
+        current season and week 1 hasn't happened) — callers that want a
+        "most recent available" fallback should retry with earlier
+        seasons rather than requesting multiple seasons in one call here.
         """
-        df, from_cache = self._get_csv("player_stats", "player_stats.csv", cache_ttl_seconds=3600)
-        if min_season is not None:
-            df = df[df["season"] >= min_season].reset_index(drop=True)
+        df, from_cache = self._get_csv("player_stats", f"player_stats_{season}.csv", cache_ttl_seconds=3600)
         return self._result(df, raw_meta={"from_cache": from_cache, "rows": len(df)})
 
     def get_roster(self, season: int) -> SourceResult[pd.DataFrame]:

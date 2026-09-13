@@ -372,19 +372,28 @@ def _fetch_injuries(team_abbrevs) -> tuple[dict, str | None]:
 
 
 def _load_historical_stats(season: int, week: int) -> tuple[dict, dict, str | None]:
-    try:
-        source = NFLStatsSource()
-        # 3-season lookback margin covers the "current season has no data
-        # yet" fallback below without loading the entire 1999-present
-        # history into memory (~125MB vs ~15MB for 3 seasons).
-        df = source.get_player_stats(min_season=season - 3).data
-        lookup_season = season if (df["season"] == season).any() else int(df["season"].max())
-        game_logs = build_game_logs_by_player(df, lookup_season, through_week=week if lookup_season == season else None)
-        fpts_allowed = build_fpts_allowed_by_team_position(df, lookup_season, through_week=week if lookup_season == season else None)
-        warning = None if lookup_season == season else f"No {season} data yet — using {lookup_season} historical rates"
-        return game_logs, fpts_allowed, warning
-    except SourceUnavailableError as exc:
-        return {}, {}, f"{exc} — projections will fall back to positional priors"
+    source = NFLStatsSource()
+    df = None
+    lookup_season = None
+    last_exc: SourceUnavailableError | None = None
+    # Try the current season first, falling back a few years if nflverse
+    # hasn't published it yet (e.g. before week 1) — one small per-season
+    # fetch (~5.5MB) at a time rather than one huge combined-history fetch.
+    for candidate in range(season, season - 4, -1):
+        try:
+            df = source.get_player_stats(candidate).data
+            lookup_season = candidate
+            break
+        except SourceUnavailableError as exc:
+            last_exc = exc
+
+    if df is None:
+        return {}, {}, f"{last_exc} — projections will fall back to positional priors"
+
+    game_logs = build_game_logs_by_player(df, lookup_season, through_week=week if lookup_season == season else None)
+    fpts_allowed = build_fpts_allowed_by_team_position(df, lookup_season, through_week=week if lookup_season == season else None)
+    warning = None if lookup_season == season else f"No {season} data yet — using {lookup_season} historical rates"
+    return game_logs, fpts_allowed, warning
 
 
 def _build_projections(
