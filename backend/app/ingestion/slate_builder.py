@@ -320,25 +320,42 @@ def _estimate_nfl_week(dt: datetime.datetime) -> int:
 
 
 def _fetch_and_apply_betting_lines(db: Session, game_by_teams: dict) -> tuple[dict, str | None]:
+    from app.models.context_data import BettingLine
+    from app.sports.nfl.team_names import FULL_NAME_TO_ABBREV
+
     game_env: dict[str, dict] = {}
+    matched_count = 0
     try:
         source = BettingSource()
         result = source.get_nfl_lines()
-        by_teams = {}
+        # Key odds by (home_abbrev, away_abbrev) rather than raw sportsbook
+        # full names — matching those against DK's abbreviations via a
+        # substring check (the previous approach) never actually matched
+        # anything (e.g. "CIN" is not a substring of "Cincinnati Bengals"),
+        # so every game silently fell back to neutral defaults despite
+        # reporting "success".
+        by_abbrev = {}
         for line in result.data:
-            by_teams[(line.home_team, line.away_team)] = line
+            home_abbrev = FULL_NAME_TO_ABBREV.get(line.home_team)
+            away_abbrev = FULL_NAME_TO_ABBREV.get(line.away_team)
+            if home_abbrev and away_abbrev:
+                by_abbrev[(home_abbrev, away_abbrev)] = line
 
         for key, game in game_by_teams.items():
-            match = next((line for (h, a), line in by_teams.items() if game.home_team.abbreviation in h or game.away_team.abbreviation in a), None)
+            match = by_abbrev.get((game.home_team.abbreviation, game.away_team.abbreviation))
             if match and match.spread_home is not None and match.total is not None:
                 env = compute_game_environment(match.spread_home, match.total)
                 game_env[game.id] = dataclasses.asdict(env)
-                db.add(__import__("app.models.context_data", fromlist=["BettingLine"]).BettingLine(
+                db.add(BettingLine(
                     game_id=game.id, book=match.book, spread_home=match.spread_home, total=match.total,
                     implied_total_home=env.home_implied_total, implied_total_away=env.away_implied_total,
                 ))
+                matched_count += 1
             else:
                 game_env[game.id] = dataclasses.asdict(compute_game_environment(0.0, 44.0))
+
+        if matched_count < len(game_by_teams):
+            return game_env, f"Matched Vegas lines for {matched_count}/{len(game_by_teams)} games — rest using neutral defaults"
         return game_env, None
     except SourceUnavailableError as exc:
         for game in game_by_teams.values():
