@@ -3,7 +3,13 @@
 // work correctly whether it's opened as localhost or through a public
 // tunnel (ngrok etc.), without exposing the backend itself. Set
 // NEXT_PUBLIC_API_BASE_URL to override with an absolute URL if needed.
-export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "";
+// Trailing slash stripped so `${API_BASE}${path}` (path always starts with
+// "/") never produces a double slash — https://host.com// -> 404 on
+// FastAPI/Starlette's exact path matching. This bit the deployed app for
+// real: NEXT_PUBLIC_API_BASE_URL was set with a trailing slash on Vercel,
+// which next.config.js's rewrite already guarded against but this
+// client-side path didn't.
+export const API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL || "").replace(/\/+$/, "");
 
 export interface Slate {
   id: string;
