@@ -133,7 +133,7 @@ def run_build_slate(
 
     # ---- 5. Injuries -------------------------------------------------------
     yield BuildProgressEvent("injuries", "running", "Fetching injury reports...")
-    injury_by_norm_name, injury_warning = _fetch_injuries(team_by_abbrev.keys())
+    injury_by_norm_name, injury_warning = _fetch_injuries(db, team_by_abbrev.keys())
     if injury_warning:
         yield BuildProgressEvent("injuries", "warning", injury_warning)
     else:
@@ -397,7 +397,7 @@ def _fetch_and_apply_weather(db: Session, game_by_teams: dict) -> list[str]:
     return warnings
 
 
-def _fetch_injuries(team_abbrevs) -> tuple[dict, str | None]:
+def _fetch_injuries(db: Session, team_abbrevs) -> tuple[dict, str | None]:
     source = InjurySource()
     out: dict[str, str] = {}
     failures = 0
@@ -410,7 +410,24 @@ def _fetch_injuries(team_abbrevs) -> tuple[dict, str | None]:
             failures += 1
     warning = None
     if failures == len(list(team_abbrevs)) and failures > 0:
-        warning = "ESPN injury endpoint unreachable from this environment — assuming all players healthy; import a report via POST /api/injuries/import"
+        warning = "ESPN injury endpoint unreachable from this environment — assuming all players healthy unless manually reported"
+
+    # Manual reports (POST /api/injuries/import) always win over the live
+    # feed for a given player — that's the whole point of the fallback
+    # path, especially since the live ESPN feed is blocked outright in
+    # this environment. Ordered oldest-first so the latest report for a
+    # given player is what ends up in the dict.
+    from app.models.context_data import PlayerInjury
+
+    manual_rows = db.execute(
+        select(PlayerInjury, Player).join(Player, PlayerInjury.player_id == Player.id).order_by(PlayerInjury.reported_at)
+    ).all()
+    manual_count = 0
+    for injury, player in manual_rows:
+        out[normalize_name(player.full_name)] = injury.status
+        manual_count += 1
+    if warning and manual_count:
+        warning = f"ESPN injury endpoint unreachable — using {manual_count} manually-reported designation(s); everyone else assumed healthy"
     return out, warning
 
 
