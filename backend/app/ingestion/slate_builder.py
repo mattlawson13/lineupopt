@@ -28,7 +28,7 @@ from app.data_sources.nfl_stats import NFLStatsSource
 from app.data_sources.weather import WeatherSource
 from app.features.game_environment import compute_game_environment
 from app.features.matchup import compute_matchup_zscores
-from app.features.nflverse_adapter import build_fpts_allowed_by_team_position, build_game_logs_by_player
+from app.features.nflverse_adapter import NFL_POSITION_MAP, build_fpts_allowed_by_team_position, build_game_logs_by_player
 from app.features.usage_features import compute_usage_snapshot
 from app.models.core import Game, Player, Team
 from app.models.enums import InjuryStatus
@@ -140,6 +140,15 @@ def run_build_slate(
         yield BuildProgressEvent("injuries", "success", f"{len(injury_by_norm_name)} injury designations loaded")
     db.commit()  # release the write lock before the slow external nflverse fetch below
 
+    # ---- 5b. Depth chart (current starter vs. backup) ----------------------
+    yield BuildProgressEvent("depth_chart", "running", "Loading current depth charts...")
+    depth_ranks, covered_team_positions, depth_warning = _load_depth_chart_ranks(slate.season)
+    effective_depth_ranks = _promote_for_injuries(dk_player_rows, depth_ranks, covered_team_positions, injury_by_norm_name)
+    if depth_warning:
+        yield BuildProgressEvent("depth_chart", "warning", depth_warning)
+    else:
+        yield BuildProgressEvent("depth_chart", "success", f"Depth-chart rank resolved for {len(effective_depth_ranks)} DK players")
+
     # ---- 6. Historical usage / matchup data --------------------------------
     yield BuildProgressEvent("historical_stats", "running", "Loading historical usage data (nflverse)...")
     game_logs, fpts_allowed, stats_warning = _load_historical_stats(slate.season, slate.week)
@@ -161,7 +170,7 @@ def run_build_slate(
 
     ensemble_by_player_id, why_panels = _build_projections(
         db, slate, dk_player_rows, team_by_abbrev, game_by_teams, game_env_by_game_id,
-        injury_by_norm_name, game_logs, matchup_zscores, model_version,
+        injury_by_norm_name, game_logs, matchup_zscores, model_version, effective_depth_ranks,
     )
     yield BuildProgressEvent("projections", "success", f"Ensemble projections built for {len(ensemble_by_player_id)} players")
     db.commit()
@@ -430,9 +439,114 @@ def _load_historical_stats(season: int, week: int) -> tuple[dict, dict, str | No
     return game_logs, fpts_allowed, warning
 
 
+_UNLISTED_DEPTH_RANK = 99  # sentinel: on the roster, but not on the tracked depth chart at all
+
+
+def _load_depth_chart_ranks(season: int) -> tuple[dict[tuple[str, str], int], set[tuple[str, str]], str | None]:
+    """(normalized_name, position) -> current depth-chart rank (1 = starter),
+    from nflverse's most recent depth-chart snapshot, plus the set of
+    (team, position) groups the chart actually covers.
+
+    Without this, a backup QB/RB/WR who has real historical game logs from
+    the last time they *were* a starter (e.g. an injury-forced start two
+    seasons ago) gets projected full starter volume off that stale usage
+    data — nothing else in the pipeline knows their current role changed.
+    The coverage set matters separately: a DK-listed player who is on the
+    roster but doesn't appear anywhere in a *covered* team+position group
+    (e.g. an emergency 3rd/4th-string arm never included on the tracked
+    depth chart) is not "unknown data" — DK pricing them at the salary
+    floor already tells us they're a scrub — so they get treated as
+    ranked below the tracked backups, not left undiscounted. See
+    `_depth_chart_multiplier`.
+    """
+    try:
+        df = NFLStatsSource().get_depth_chart(season).data
+    except SourceUnavailableError as exc:
+        return {}, set(), f"Depth chart unavailable — cannot distinguish current starters from backups: {exc}"
+    if df.empty:
+        return {}, set(), "Depth chart empty"
+
+    latest = df[df["dt"] == df["dt"].max()]
+    ranks: dict[tuple[str, str], int] = {}
+    covered: set[tuple[str, str]] = set()
+    for _, row in latest.iterrows():
+        position = NFL_POSITION_MAP.get(row["pos_abb"])
+        if not position or not isinstance(row["team"], str):
+            continue
+        team_abbrev = normalize_team_abbreviation(row["team"])
+        covered.add((team_abbrev, position))
+        if not isinstance(row["player_name"], str):
+            continue
+        key = (normalize_name(row["player_name"]), position)
+        rank = int(row["pos_rank"])
+        if key not in ranks or rank < ranks[key]:
+            ranks[key] = rank
+    return ranks, covered, None
+
+
+_UNAVAILABLE_INJURY_STATUSES = {"out", "ir", "pup", "suspended"}
+
+
+def _promote_for_injuries(
+    dk_player_rows, depth_ranks: dict, covered_team_positions: set, injury_by_norm_name: dict,
+) -> dict[str, int]:
+    """Effective depth-chart rank per DK player row id: a backup ranked
+    behind a player who is OUT/IR/etc. gets promoted (rank - 1 per
+    unavailable player above them) so they're valued like the starter
+    they're about to be, not discounted like a career backup. A player
+    whose team+position group is tracked but who isn't listed in it gets
+    the sentinel worst rank instead of being skipped — see
+    `_load_depth_chart_ranks`.
+    """
+    groups: dict[tuple[str, str], list[tuple[int, str, object]]] = {}
+    for row in dk_player_rows:
+        if row.dk_position not in ("QB", "RB", "WR", "TE"):
+            continue
+        norm = normalize_name(row.display_name)
+        rank = depth_ranks.get((norm, row.dk_position))
+        if rank is None:
+            if (row.team_abbreviation, row.dk_position) not in covered_team_positions:
+                continue
+            rank = _UNLISTED_DEPTH_RANK
+        groups.setdefault((row.team_abbreviation, row.dk_position), []).append((rank, norm, row))
+
+    effective: dict[str, int] = {}
+    for members in groups.values():
+        members.sort(key=lambda m: m[0])
+        promote_by = 0
+        for rank, norm, row in members:
+            effective[row.id] = max(rank - promote_by, 1)
+            if injury_by_norm_name.get(norm) in _UNAVAILABLE_INJURY_STATUSES:
+                promote_by += 1
+    return effective
+
+
+_DEPTH_CHART_AVAILABILITY = {
+    "QB": {1: 1.0, 2: 0.05, 3: 0.02},
+    "RB": {1: 1.0, 2: 0.5, 3: 0.15, 4: 0.05},
+    "WR": {1: 1.0, 2: 0.85, 3: 0.65, 4: 0.35, 5: 0.15},
+    "TE": {1: 1.0, 2: 0.3, 3: 0.1},
+}
+_DEPTH_CHART_FLOOR = {"QB": 0.02, "RB": 0.05, "WR": 0.1, "TE": 0.1}
+
+
+def _depth_chart_multiplier(position: str, effective_rank: int | None) -> float:
+    """Fraction of a "full starter" projection this depth-chart slot should
+    actually get. An unknown rank (name-matching miss, practice-squad
+    elevation not yet reflected, etc.) is deliberately NOT discounted — a
+    false "no data" should never zero out what might be a real starter.
+    """
+    if effective_rank is None:
+        return 1.0
+    table = _DEPTH_CHART_AVAILABILITY.get(position)
+    if not table:
+        return 1.0
+    return table.get(effective_rank, _DEPTH_CHART_FLOOR.get(position, 0.1))
+
+
 def _build_projections(
     db, slate, dk_player_rows, team_by_abbrev, game_by_teams, game_env_by_game_id,
-    injury_by_norm_name, game_logs, matchup_zscores, model_version,
+    injury_by_norm_name, game_logs, matchup_zscores, model_version, effective_depth_ranks,
 ):
     proj_source_model = _get_or_create_projection_source(db, "proprietary_model", "model")
     ensemble_by_player_id: dict[str, dict] = {}
@@ -456,7 +570,11 @@ def _build_projections(
 
         norm_name = normalize_name(dk_row.display_name)
         injury_status = injury_by_norm_name.get(norm_name, "healthy")
-        availability = {"healthy": 1.0, "questionable": 0.9, "doubtful": 0.4, "out": 0.0, "ir": 0.0}.get(injury_status, 1.0)
+        injury_availability = {"healthy": 1.0, "questionable": 0.9, "doubtful": 0.4, "out": 0.0, "ir": 0.0}.get(injury_status, 1.0)
+
+        depth_rank = effective_depth_ranks.get(dk_row.id)
+        depth_multiplier = _depth_chart_multiplier(position, depth_rank)
+        availability = injury_availability * depth_multiplier
 
         mz = matchup_zscores.get((dk_row.opponent_abbreviation, position), 0.0)
 
@@ -481,7 +599,11 @@ def _build_projections(
             slate_id=slate.id, player_id=player.id, dk_player_id_fk=dk_row.id, source_id=proj_source_model.id,
             model_version_id=model_version.id, projected_points=component.projected_points,
             floor=component.floor, median=component.projected_points, ceiling=component.ceiling,
-            std_dev=component.model_uncertainty, confidence=0.85, inputs={"season_usage": season_usage, "recent_usage": recent_usage},
+            std_dev=component.model_uncertainty, confidence=0.85,
+            inputs={
+                "season_usage": season_usage, "recent_usage": recent_usage,
+                "depth_chart_rank": depth_rank, "depth_chart_multiplier": depth_multiplier,
+            },
             component_breakdown=component.why_panel(),
         ))
         db.add(EnsembleProjection(
