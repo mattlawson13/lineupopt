@@ -50,8 +50,16 @@ class NFLStatsSource(DataSource):
         df, from_cache = self._get_csv("schedules", "games.csv", cache_ttl_seconds=3600)
         return self._result(df, raw_meta={"from_cache": from_cache, "rows": len(df)})
 
-    def get_player_stats(self) -> SourceResult[pd.DataFrame]:
+    def get_player_stats(self, min_season: int | None = None) -> SourceResult[pd.DataFrame]:
+        """`min_season`, when given, drops older seasons immediately after
+        parsing. The full file spans 1999-present (~125MB in memory as a
+        DataFrame); callers almost always only need the current/recent
+        season(s), and holding the whole history in memory is what pushed
+        a 512MB Render instance over its limit during a live slate build.
+        """
         df, from_cache = self._get_csv("player_stats", "player_stats.csv", cache_ttl_seconds=3600)
+        if min_season is not None:
+            df = df[df["season"] >= min_season].reset_index(drop=True)
         return self._result(df, raw_meta={"from_cache": from_cache, "rows": len(df)})
 
     def get_roster(self, season: int) -> SourceResult[pd.DataFrame]:

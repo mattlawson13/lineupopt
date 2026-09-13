@@ -34,7 +34,11 @@ def gamma_ppf_from_normal(std_normal_draws: np.ndarray, mean: float | np.ndarray
     k, theta = gamma_params(mean, cv)
     u = stats.norm.cdf(std_normal_draws)
     u = np.clip(u, 1e-6, 1 - 1e-6)
-    return stats.gamma.ppf(u, a=k, scale=theta)
+    # float32: fantasy-point values need nowhere near float64 precision,
+    # and this array is duplicated per player across the whole slate (a
+    # real driver of the memory pressure that tipped a 512MB instance
+    # over its limit) — halving it matters.
+    return stats.gamma.ppf(u, a=k, scale=theta).astype(np.float32)
 
 
 @dataclasses.dataclass

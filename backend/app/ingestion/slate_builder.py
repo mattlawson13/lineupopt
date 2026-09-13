@@ -374,7 +374,10 @@ def _fetch_injuries(team_abbrevs) -> tuple[dict, str | None]:
 def _load_historical_stats(season: int, week: int) -> tuple[dict, dict, str | None]:
     try:
         source = NFLStatsSource()
-        df = source.get_player_stats().data
+        # 3-season lookback margin covers the "current season has no data
+        # yet" fallback below without loading the entire 1999-present
+        # history into memory (~125MB vs ~15MB for 3 seasons).
+        df = source.get_player_stats(min_season=season - 3).data
         lookup_season = season if (df["season"] == season).any() else int(df["season"].max())
         game_logs = build_game_logs_by_player(df, lookup_season, through_week=week if lookup_season == season else None)
         fpts_allowed = build_fpts_allowed_by_team_position(df, lookup_season, through_week=week if lookup_season == season else None)
