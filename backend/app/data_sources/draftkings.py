@@ -54,6 +54,9 @@ class DraftKingsContestSummary:
     total_prizes: float
     max_entries: int
     is_guaranteed: bool
+    game_type: str  # DK's own contest format label, e.g. "Classic", "Showdown Captain Mode",
+    # "Single Stat - Total Yards", "In-Game Showdown (Q4)", "Madden Classic", "Snake Showdown",
+    # "Best Ball" — only "Classic" is the standard 9-man salary-cap format this app builds for.
 
 
 @dataclasses.dataclass
@@ -121,6 +124,7 @@ class DraftKingsApiSource(DataSource):
                         total_prizes=float(raw.get("po", 0.0)),
                         max_entries=int(raw.get("m", 0)),
                         is_guaranteed=str(raw.get("attr", {}).get("IsGuaranteed", "false")).lower() == "true",
+                        game_type=raw.get("gameType", ""),
                     )
                 )
             except (KeyError, ValueError, TypeError) as exc:

@@ -11,6 +11,13 @@
 // client-side path didn't.
 export const API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL || "").replace(/\/+$/, "");
 
+export interface AvailableDkSlate {
+  dk_draft_group_id: string;
+  start_time_utc: string;
+  contest_count: number;
+  sample_contest_name: string;
+}
+
 export interface Slate {
   id: string;
   sport: string;
@@ -117,6 +124,7 @@ async function getJSON<T>(path: string): Promise<T> {
 
 export const api = {
   listSlates: () => getJSON<Slate[]>("/api/slates"),
+  listAvailableDkSlates: () => getJSON<AvailableDkSlate[]>("/api/slates/available"),
   getSlate: (id: string) => getJSON<Slate & { games: Game[] }>(`/api/slates/${id}`),
   getSlatePlayers: (id: string) => getJSON<PlayerRow[]>(`/api/slates/${id}/players`),
   getSlateGames: (id: string) => getJSON<Game[]>(`/api/slates/${id}/games`),

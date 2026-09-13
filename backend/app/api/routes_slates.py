@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.api.serialize import serialize_game, serialize_player_row, serialize_slate
+from app.data_sources.base import SourceUnavailableError
+from app.data_sources.draftkings import DraftKingsApiSource
 from app.models.analytics import OwnershipProjection, PlayerSimulationResult, SimulationRun
 from app.models.core import Game
 from app.models.projections import EnsembleProjection
@@ -18,6 +20,53 @@ router = APIRouter(prefix="/api/slates", tags=["slates"])
 def list_slates(db: Session = Depends(get_db)):
     slates = db.execute(select(Slate).order_by(Slate.start_time_utc.desc())).scalars().all()
     return [serialize_slate(s) for s in slates]
+
+
+@router.get("/available")
+def list_available_dk_slates():
+    """Live DraftKings NFL contest lobby, collapsed into one row per DK
+    draft group — this is what lets the frontend offer a "pick a slate"
+    list instead of requiring a hand-typed draft group id. One draft group
+    backs many contests (cash games, GPPs, single-entry, ...) that all
+    share the exact same slate of players/games, so contests are grouped
+    by dk_draft_group_id, using whichever contest in the group has the
+    largest total prize pool as the representative name (typically the
+    flagship GPP, which is the one a person actually recognizes).
+    """
+    try:
+        result = DraftKingsApiSource().get_nfl_contests()
+    except SourceUnavailableError as exc:
+        raise HTTPException(503, str(exc))
+
+    by_group: dict[str, dict] = {}
+    for c in result.data:
+        if c.game_type != "Classic":
+            # Everything else (Showdown, Snake Showdown, Single Stat, In-
+            # Game, Madden Classic, Best Ball, ...) uses a different
+            # roster format this app's optimizer isn't built for.
+            continue
+        start_iso = c.start_time_utc.isoformat()
+        group = by_group.get(c.dk_draft_group_id)
+        if group is None:
+            group = {
+                "dk_draft_group_id": c.dk_draft_group_id,
+                "start_time_utc": start_iso,
+                "contest_count": 0,
+                "sample_contest_name": c.name,
+                "_max_prizes": c.total_prizes,
+            }
+            by_group[c.dk_draft_group_id] = group
+        group["contest_count"] += 1
+        if start_iso < group["start_time_utc"]:
+            group["start_time_utc"] = start_iso
+        if c.total_prizes > group["_max_prizes"]:
+            group["_max_prizes"] = c.total_prizes
+            group["sample_contest_name"] = c.name
+
+    slates = sorted(by_group.values(), key=lambda g: g["start_time_utc"])
+    for g in slates:
+        del g["_max_prizes"]
+    return slates
 
 
 @router.get("/{slate_id}")
