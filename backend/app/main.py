@@ -15,6 +15,10 @@ app = FastAPI(title="LineupOpt", description="DraftKings DFS projection, simulat
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    # Also allow dev-tunnel origins (localtunnel/ngrok — used to expose the
+    # local dev server to a phone for testing) — narrow to these specific
+    # host patterns rather than a blanket wildcard.
+    allow_origin_regex=r"https://.*\.(loca\.lt|ngrok-free\.app|ngrok\.app|ngrok\.io)",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
