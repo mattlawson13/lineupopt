@@ -5,6 +5,8 @@ backend/.venv/
 backend/.cache/
 backend/lineupopt.db
 backend/*.db
+backend/*.db-shm
+backend/*.db-wal
 
 # Node / Next.js
 frontend/node_modules/
