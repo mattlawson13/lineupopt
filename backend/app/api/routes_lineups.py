@@ -15,7 +15,8 @@ from app.api.deps import get_db
 from app.api.schemas import ManualOptimizeRequest
 from app.api.serialize import serialize_lineup
 from app.config.loader import get_optimization_settings
-from app.models.analytics import OwnershipProjection, PlayerSimulationResult, SimulationRun
+from app.ingestion.slate_builder import _compute_correlation_scores
+from app.models.analytics import Correlation, OwnershipProjection, PlayerSimulationResult, SimulationRun
 from app.models.core import Player
 from app.models.lineup import Lineup, LineupPlayer, OptimizationRun
 from app.models.projections import EnsembleProjection
@@ -86,6 +87,10 @@ def generate_lineups(req: ManualOptimizeRequest, db: Session = Depends(get_db)):
     mode_cfg = opt_cfg["contest_modes"].get(req.objective, opt_cfg["contest_modes"]["large_field_gpp"])
     weights = mode_cfg["objective_weights"]
 
+    correlation_rows = db.execute(select(Correlation).where(Correlation.slate_id == req.slate_id)).scalars().all()
+    correlation_scores = _compute_correlation_scores(correlation_rows, {row.player_id for row in dk_rows if row.player_id})
+    CORRELATION_SCALE = 15.0
+
     optimizer_players = []
     for row in dk_rows:
         ens = ensembles.get(row.player_id)
@@ -103,6 +108,7 @@ def generate_lineups(req: ManualOptimizeRequest, db: Session = Depends(get_db)):
             weights.get("median", 0) * ens.median + weights.get("projection", 0) * ens.ensemble_projection
             + weights.get("ceiling", 0) * (sim.ceiling if sim else ens.ceiling) + weights.get("floor", 0) * ens.floor
             + weights.get("leverage", 0) * leverage_proxy + weights.get("volatility", 0) * (sim.std_dev if sim else ens.std_dev)
+            + weights.get("correlation", 0) * correlation_scores.get(row.player_id, 0.0) * CORRELATION_SCALE
         )
         salary = row.salaries[-1].salary if row.salaries else 0
         optimizer_players.append(OptimizerPlayer(

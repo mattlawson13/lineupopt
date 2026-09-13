@@ -193,7 +193,7 @@ def run_build_slate(
     yield BuildProgressEvent("optimize", "running", f"Generating {options.num_lineups} lineups...")
     opt_run, lineups = _optimize_lineups(
         db, slate, dk_player_rows, ensemble_by_player_id, ownership_by_player_id, sim_result, sim_run, options,
-        game_env_by_game_id,
+        game_env_by_game_id, correlation_entries,
     )
     yield BuildProgressEvent("optimize", "success", f"{len(lineups)} lineups generated")
     db.commit()
@@ -595,12 +595,41 @@ def _run_simulation(db, slate, dk_player_rows, ensemble_by_player_id, game_by_te
     return result, sim_run
 
 
-def _optimize_lineups(db, slate, dk_player_rows, ensemble_by_player_id, ownership_by_player_id, sim_result, sim_run, options: BuildOptions, game_env_by_game_id: dict | None = None):
+def _compute_correlation_scores(correlation_entries, player_ids: set[str]) -> dict[str, float]:
+    """Per-player proxy for "how much GPP correlation value does this
+    player carry" — sums their correlation against every QB relationship
+    they're part of (their own team's QB, or as a bring-back piece against
+    an opposing QB). This is what actually plugs the `correlation` weight
+    into the optimizer's objective; previously it was multiplied by a
+    literal 0 (a stubbed-out placeholder that never got finished), so
+    large-field GPP lineups weren't rewarded for real correlation beyond
+    whatever the forced QB-stack constraint alone produced.
+    """
+    scores: dict[str, float] = {pid: 0.0 for pid in player_ids}
+    for e in correlation_entries:
+        if not e.relationship_type.startswith("qb_"):
+            continue
+        if e.player_a_id in scores:
+            scores[e.player_a_id] += e.correlation
+        if e.player_b_id in scores:
+            scores[e.player_b_id] += e.correlation
+    return scores
+
+
+def _optimize_lineups(db, slate, dk_player_rows, ensemble_by_player_id, ownership_by_player_id, sim_result, sim_run, options: BuildOptions, game_env_by_game_id: dict | None = None, correlation_entries=None):
     from app.config.loader import get_optimization_settings
 
     opt_cfg = get_optimization_settings()
     mode_cfg = opt_cfg["contest_modes"].get(options.objective, opt_cfg["contest_modes"]["large_field_gpp"])
     weights = mode_cfg["objective_weights"]
+
+    correlation_scores = _compute_correlation_scores(
+        correlation_entries or [], {r.player_id for r in dk_player_rows if r.player_id}
+    )
+    # Correlation values live in [-1, 1]; scale up so the weighted term is
+    # comparable in magnitude to the point-based terms (median/ceiling
+    # etc., which run ~5-30) rather than being numerically negligible.
+    CORRELATION_SCALE = 15.0
 
     optimizer_players = []
     players_by_id = {}
@@ -620,8 +649,8 @@ def _optimize_lineups(db, slate, dk_player_rows, ensemble_by_player_id, ownershi
             + weights.get("ceiling", 0) * (sim.ceiling if sim else ens.ceiling)
             + weights.get("floor", 0) * ens.floor
             + weights.get("leverage", 0) * leverage_proxy
-            + weights.get("correlation", 0) * 0  # realized via forced stacks / covariance in simulation, not a per-player scalar
-            + weights.get("uniqueness", 0) * 0
+            + weights.get("correlation", 0) * correlation_scores.get(r.player_id, 0.0) * CORRELATION_SCALE
+            + weights.get("uniqueness", 0) * 0  # uniqueness is enforced structurally via exposure/overlap constraints in diversification.py, not a per-player scalar
             + weights.get("volatility", 0) * (sim.std_dev if sim else ens.std_dev)
         )
 
