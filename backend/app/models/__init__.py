@@ -15,8 +15,10 @@ from app.models.projections import EnsembleProjection, Projection, ProjectionSou
 from app.models.analytics import (  # noqa: F401
     Correlation,
     OwnershipProjection,
+    PlayerActualResult,
     PlayerSimulationResult,
     SimulationRun,
+    SlateResolution,
 )
 from app.models.lineup import Lineup, LineupPlayer, ModelVersion, OptimizationRun  # noqa: F401
 from app.models.backtest import BacktestResult  # noqa: F401
@@ -40,8 +42,10 @@ __all__ = [
     "ProjectionSource",
     "Correlation",
     "OwnershipProjection",
+    "PlayerActualResult",
     "PlayerSimulationResult",
     "SimulationRun",
+    "SlateResolution",
     "Lineup",
     "LineupPlayer",
     "ModelVersion",

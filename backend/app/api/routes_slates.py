@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import dataclasses
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -8,7 +10,8 @@ from app.api.deps import get_db
 from app.api.serialize import serialize_game, serialize_player_row, serialize_slate
 from app.data_sources.base import SourceUnavailableError
 from app.data_sources.draftkings import DraftKingsApiSource
-from app.models.analytics import OwnershipProjection, PlayerSimulationResult, SimulationRun
+from app.ingestion.resolution import ResolutionUnavailableError, resolve_slate
+from app.models.analytics import OwnershipProjection, PlayerSimulationResult, SimulationRun, SlateResolution
 from app.models.core import Game
 from app.models.projections import EnsembleProjection
 from app.models.slate import DraftKingsPlayer, Slate
@@ -134,4 +137,42 @@ def get_slate_players(slate_id: str, db: Session = Depends(get_db)):
         serialize_player_row(row, ensembles.get(row.player_id), ownerships.get(row.player_id), sim_by_player.get(row.player_id))
         for row in dk_rows
         if row.player_id
+    ]
+
+
+@router.post("/{slate_id}/resolve")
+def resolve_slate_route(slate_id: str, optimization_run_id: str | None = None, db: Session = Depends(get_db)):
+    """Grades a slate's most recent (or a specified) optimization run
+    against real DK points, once nflverse has published that week's final
+    box scores. See ingestion/resolution.py for what this can and can't
+    determine (notably: DST/K aren't resolvable from this data source).
+    """
+    slate = db.get(Slate, slate_id)
+    if not slate:
+        raise HTTPException(404, "Slate not found")
+    try:
+        result = resolve_slate(db, slate_id, optimization_run_id)
+    except ResolutionUnavailableError as exc:
+        raise HTTPException(409, str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return dataclasses.asdict(result)
+
+
+@router.get("/{slate_id}/resolutions")
+def list_slate_resolutions(slate_id: str, db: Session = Depends(get_db)):
+    slate = db.get(Slate, slate_id)
+    if not slate:
+        raise HTTPException(404, "Slate not found")
+    rows = db.execute(
+        select(SlateResolution).where(SlateResolution.slate_id == slate_id).order_by(SlateResolution.created_at.desc())
+    ).scalars().all()
+    return [
+        {
+            "id": r.id, "optimization_run_id": r.optimization_run_id, "retro_optimal_lineup_id": r.retro_optimal_lineup_id,
+            "our_best_actual_points": r.our_best_actual_points, "retro_optimal_points": r.retro_optimal_points,
+            "players_resolved": r.players_resolved, "mae": r.mae, "bias": r.bias,
+            "summary": r.summary, "created_at": r.created_at.isoformat(),
+        }
+        for r in rows
     ]
