@@ -9,15 +9,18 @@ import { api, Lineup } from "@/lib/api";
 // never overlap between the two (QB/RB/WR/TE/DST vs CPT/FLEX).
 const SLOT_ORDER = ["CPT", "QB", "RB", "WR", "TE", "DST", "FLEX"];
 
-export default function LineupsPanel({ lineups }: { lineups: Lineup[] }) {
+export default function LineupsPanel({ lineups, slateId }: { lineups: Lineup[]; slateId: string }) {
   // Late swap replaces one lineup with a freshly re-optimized one (a new
   // OptimizationRun under the hood) — re-fetching the slate's lineups from
   // the backend would collapse the view down to just that new run's single
   // lineup, losing the rest of the portfolio. Keeping a local, editable
-  // copy lets a swap update just that one card in place instead.
+  // copy lets a swap update just that one card in place instead, and lets
+  // "Generate More" append a fresh batch onto what's already shown.
   const [localLineups, setLocalLineups] = useState(lineups);
   const [swapping, setSwapping] = useState<Set<string>>(new Set());
   const [swapError, setSwapError] = useState<Record<string, string>>({});
+  const [generatingMore, setGeneratingMore] = useState(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
 
   useEffect(() => setLocalLineups(lineups), [lineups]);
 
@@ -39,6 +42,27 @@ export default function LineupsPanel({ lineups }: { lineups: Lineup[] }) {
     }
   };
 
+  const handleGenerateMore = async () => {
+    setGeneratingMore(true);
+    setGenerateError(null);
+    try {
+      const result = await api.generateLineups({
+        slate_id: slateId,
+        num_lineups: 10,
+        exclude_lineup_ids: localLineups.map((lu) => lu.id),
+      });
+      if (result?.lineups) {
+        setLocalLineups((prev) => [...prev, ...result.lineups]);
+      } else {
+        setGenerateError(result?.detail || "No lineups returned");
+      }
+    } catch (e: any) {
+      setGenerateError(e?.message || String(e));
+    } finally {
+      setGeneratingMore(false);
+    }
+  };
+
   if (!localLineups.length) {
     return (
       <div className="rounded-lg border border-surface-border bg-surface-raised p-8 text-center text-sm text-slate-500">
@@ -48,8 +72,23 @@ export default function LineupsPanel({ lineups }: { lineups: Lineup[] }) {
   }
 
   return (
-    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-      {localLineups.map((lu) => (
+    <div>
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <span className="text-xs text-slate-500">{localLineups.length} lineups</span>
+        <div className="flex items-center gap-2">
+          {generateError && <span className="text-[11px] text-danger">{generateError}</span>}
+          <button
+            onClick={handleGenerateMore}
+            disabled={generatingMore}
+            title="Generate 10 more lineups that stay meaningfully different from the ones below, instead of near-duplicates"
+            className="rounded border border-surface-border bg-surface px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {generatingMore ? "Generating…" : "Generate 10 More (No Duplicates)"}
+          </button>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {localLineups.map((lu) => (
         <div key={lu.id} className="rounded-lg border border-surface-border bg-surface-raised p-4">
           <div className="mb-2 flex items-center justify-between">
             <span className="text-sm font-semibold text-accent">
@@ -99,7 +138,8 @@ export default function LineupsPanel({ lineups }: { lineups: Lineup[] }) {
             <div className="mt-1.5 text-[11px] text-danger">{swapError[lu.id]}</div>
           )}
         </div>
-      ))}
+        ))}
+      </div>
     </div>
   );
 }

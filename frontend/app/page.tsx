@@ -119,7 +119,7 @@ export default function Home() {
         ) : (
           <EmptyState text="No player pool yet — build a slate first." />
         ))}
-      {tab === "lineups" && <LineupsPanel lineups={lineups} />}
+      {tab === "lineups" && activeSlateId && <LineupsPanel lineups={lineups} slateId={activeSlateId} />}
 
       {selectedPlayer && activeSlateId && (
         <PlayerDetailDrawer player={selectedPlayer} slateId={activeSlateId} onClose={() => setSelectedPlayer(null)} />
