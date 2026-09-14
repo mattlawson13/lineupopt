@@ -40,6 +40,7 @@ export interface Slate {
   game_ids: string[];
   source: string;
   imported_at: string;
+  injury_alert_detail: string | null;
 }
 
 export interface Game {

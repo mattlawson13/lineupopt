@@ -26,6 +26,15 @@ class Slate(Base, UUIDPk, TimestampMixin):
     imported_at: Mapped[datetime.datetime] = mapped_column(
         default=lambda: datetime.datetime.now(datetime.timezone.utc)
     )
+    # Set by ingestion/injury_watch.py when a player's injury designation
+    # has changed since this slate was last built — non-null means "a
+    # rebuild would likely change these projections." Cleared whenever the
+    # slate is (re)built, since a fresh build captures current injury
+    # status anyway. Never auto-rebuilds: a rebuild costs real money (prop
+    # odds quota) and processing time, and silently replacing lineups a
+    # user may already be relying on would be a bad surprise — this is
+    # strictly a "you should probably rebuild" flag for a human to act on.
+    injury_alert_detail: Mapped[str | None] = mapped_column(String(2000), nullable=True)
 
     dk_players: Mapped[list["DraftKingsPlayer"]] = relationship(back_populates="slate")
     contests: Mapped[list["Contest"]] = relationship(back_populates="slate")

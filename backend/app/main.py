@@ -17,6 +17,7 @@ from app.api import (
     routes_slates,
 )
 from app.db.session import SessionLocal, create_all
+from app.ingestion.injury_watch import check_injury_changes
 from app.ingestion.slate_builder import capture_all_open_slates
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -62,6 +63,23 @@ def _run_scheduled_capture() -> None:
         db.close()
 
 
+def _run_scheduled_injury_watch() -> None:
+    """Job body for the periodic injury-change check — see
+    ingestion/injury_watch.py. Flags a slate rather than rebuilding it;
+    never lets an exception escape for the same reason as the capture job
+    above.
+    """
+    db = SessionLocal()
+    try:
+        result = check_injury_changes(db)
+        if result["flagged"]:
+            logger.info("scheduled injury watch: %s", result)
+    except Exception:
+        logger.exception("scheduled check_injury_changes failed")
+    finally:
+        db.close()
+
+
 @app.on_event("startup")
 def on_startup() -> None:
     # Dev convenience — production deployments should use Alembic
@@ -75,6 +93,15 @@ def on_startup() -> None:
             minutes=15,
             id="capture_open_slates",
             next_run_time=datetime.datetime.now(datetime.timezone.utc),
+            max_instances=1,
+            coalesce=True,
+        )
+        scheduler.add_job(
+            _run_scheduled_injury_watch,
+            "interval",
+            minutes=15,
+            id="injury_watch",
+            next_run_time=datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=5),
             max_instances=1,
             coalesce=True,
         )

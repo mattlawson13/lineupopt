@@ -10,6 +10,7 @@ from app.api.deps import get_db
 from app.api.serialize import serialize_game, serialize_player_row, serialize_slate
 from app.data_sources.base import SourceUnavailableError
 from app.data_sources.draftkings import DraftKingsApiSource
+from app.ingestion.injury_watch import check_injury_changes
 from app.ingestion.resolution import ResolutionUnavailableError, resolve_slate
 from app.ingestion.slate_builder import SlateCaptureUnavailableError, capture_all_open_slates
 from app.models.analytics import OwnershipProjection, PlayerSimulationResult, SimulationRun, SlateResolution
@@ -39,6 +40,17 @@ def capture_all_open_slates_route(db: Session = Depends(get_db)):
         return capture_all_open_slates(db)
     except SlateCaptureUnavailableError as exc:
         raise HTTPException(503, str(exc))
+
+
+@router.post("/check_injury_changes")
+def check_injury_changes_route(db: Session = Depends(get_db)):
+    """Flags any already-built, not-yet-started slate whose players'
+    injury designations have changed since the last build (see
+    ingestion/injury_watch.py) — never auto-rebuilds, just flags. Also
+    runs automatically on a schedule (see main.py); this is the on-demand
+    version of the same thing.
+    """
+    return check_injury_changes(db)
 
 
 _SUPPORTED_DK_GAME_TYPES = {

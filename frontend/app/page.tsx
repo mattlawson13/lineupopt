@@ -115,6 +115,21 @@ export default function Home() {
         </div>
       )}
 
+      {activeSlate?.injury_alert_detail && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-warn/40 bg-warn/10 px-4 py-3 text-sm">
+          <div>
+            <span className="font-semibold text-warn">Injury news since this slate was last built: </span>
+            <span className="text-slate-300">{activeSlate.injury_alert_detail}</span>
+          </div>
+          <button
+            onClick={() => setTab("build")}
+            className="shrink-0 rounded border border-warn/50 px-3 py-1.5 text-xs font-medium text-warn transition hover:bg-warn/20"
+          >
+            Rebuild This Slate
+          </button>
+        </div>
+      )}
+
       {error && <div className="mb-4 rounded border border-danger/40 bg-danger/10 p-3 text-sm text-danger">{error}</div>}
 
       {tab === "build" && <BuildSlatePanel onComplete={handleBuildComplete} />}

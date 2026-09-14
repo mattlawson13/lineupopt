@@ -118,6 +118,10 @@ def run_build_slate(
     # ---- 2. Persist teams/games/players/slate --------------------------
     yield BuildProgressEvent("persist_entities", "running", "Normalizing players/teams/games...")
     slate, dk_player_rows, team_by_abbrev, game_by_teams = _persist_slate_entities(db, dk_slate, run_id)
+    # A fresh build is about to capture current injury status anyway (see
+    # step 5 below), so any earlier injury_watch alert is resolved by this
+    # build regardless of what it finds.
+    slate.injury_alert_detail = None
     db.commit()
     yield BuildProgressEvent(
         "persist_entities", "success",
@@ -935,6 +939,11 @@ def _build_projections(
             inputs={
                 "season_usage": season_usage, "recent_usage": recent_usage,
                 "depth_chart_rank": depth_rank, "depth_chart_multiplier": depth_multiplier,
+                # Snapshot of injury status AT BUILD TIME — compared against
+                # current status by ingestion/injury_watch.py to detect a
+                # status change since this build (e.g. questionable -> out)
+                # that would make this projection stale.
+                "injury_status": injury_status,
             },
             component_breakdown=component.why_panel(),
         ))

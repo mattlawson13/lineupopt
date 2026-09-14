@@ -17,6 +17,7 @@ def serialize_slate(slate) -> dict:
         "dk_draft_group_id": slate.dk_draft_group_id, "name": slate.name,
         "season": slate.season, "week": slate.week, "start_time_utc": _iso(slate.start_time_utc),
         "game_ids": slate.game_ids, "source": slate.source, "imported_at": _iso(slate.imported_at),
+        "injury_alert_detail": slate.injury_alert_detail,
     }
 
 
