@@ -31,6 +31,10 @@ RATE_FIELD_SOURCES = {
 COUNT_FIELDS = [
     "pass_attempts", "rush_attempts", "targets", "fg_attempts", "xp_attempts",
     "fumbles_lost", "sacks", "interceptions", "fumble_recoveries",
+    # DST-only (features/espn_adapter.py's build_dst_game_logs_by_team) —
+    # nflverse never covered team defense, so these were unused/dead until
+    # that adapter started producing real per-game DST rows.
+    "def_td", "safety", "blocked_kick", "return_td", "points_allowed",
 ]
 
 

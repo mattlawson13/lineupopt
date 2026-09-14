@@ -19,14 +19,20 @@ MATCHUP_SENSITIVITY = 1.4          # opponent offensive-line/turnover-proneness 
 
 
 def _stat_line(usage: dict, opponent_implied_total: float) -> dict:
+    # Key names match what features/usage_features.py's compute_usage_snapshot()
+    # actually produces from COUNT_FIELDS ("<field>_pg"), fed by real
+    # per-game team-defense rows from features/espn_adapter.py
+    # (build_dst_game_logs_by_team) — nflverse never had team-defense
+    # data, so before that adapter existed `usage` was always empty here
+    # and every team got these same hardcoded defaults every week.
     return {
         "sacks": usage.get("sacks_pg", 2.2),
-        "dst_interceptions": usage.get("int_pg", 0.8),
-        "dst_fumble_recoveries": usage.get("fumble_rec_pg", 0.6),
-        "dst_td": usage.get("def_td_rate", 0.12),
-        "safeties": usage.get("safety_rate", 0.03),
-        "blocked_kicks": usage.get("blocked_kick_rate", 0.05),
-        "dst_return_td": usage.get("return_td_rate", 0.06),
+        "dst_interceptions": usage.get("interceptions_pg", 0.8),
+        "dst_fumble_recoveries": usage.get("fumble_recoveries_pg", 0.6),
+        "dst_td": usage.get("def_td_pg", 0.12),
+        "safeties": usage.get("safety_pg", 0.03),
+        "blocked_kicks": usage.get("blocked_kick_pg", 0.05),
+        "dst_return_td": usage.get("return_td_pg", 0.06),
         "points_allowed": usage.get("points_allowed_pg", opponent_implied_total),
     }
 

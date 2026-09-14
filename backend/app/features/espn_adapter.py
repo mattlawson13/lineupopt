@@ -363,3 +363,110 @@ def build_fpts_allowed_by_team_position(rows: list[dict]) -> dict[tuple[str, str
     for row in rows:
         grouped.setdefault((row["opponent_team"], row["position"]), []).append(row["fantasy_points_ppr"])
     return {key: round(sum(vals) / len(vals), 2) for key, vals in grouped.items()}
+
+
+def _espn_team_stats_to_dst_stats(splits: dict, team: str, week: int, season: int) -> dict:
+    """Maps ESPN's per-team-per-game stat categories onto the raw count
+    fields projections/nfl/dst.py's _stat_line() expects (via
+    features/usage_features.py's COUNT_FIELDS averaging) — nflverse's
+    player_stats has never covered team defense at all (offense-only), so
+    unlike the skill-position merge above this isn't filling a staleness
+    gap, it's the first time DST has ever had real per-game input instead
+    of a hardcoded league-average constant.
+    """
+    cats = splits["categories"]
+    return {
+        "sacks": _stat_value(cats, "defensive", "sacks"),
+        "interceptions": _stat_value(cats, "defensiveInterceptions", "interceptions"),
+        "fumble_recoveries": _stat_value(cats, "returning", "oppFumbleRecoveries"),
+        "def_td": _stat_value(cats, "defensive", "defensiveTouchdowns"),
+        "safety": _stat_value(cats, "defensive", "safeties"),
+        "blocked_kick": _stat_value(cats, "defensive", "kicksBlocked"),
+        "return_td": (
+            _stat_value(cats, "returning", "kickReturnTouchdowns")
+            + _stat_value(cats, "returning", "puntReturnTouchdowns")
+        ),
+        "points_allowed": _stat_value(cats, "defensive", "pointsAllowed"),
+        "team": normalize_team_abbreviation(team),
+        "week": week,
+        "season": season,
+    }
+
+
+def fetch_week_team_defense_rows(season: int, week: int, season_type: int = 2) -> list[dict]:
+    """Cached (see fetch_week_player_rows) real team-level defensive box
+    score for every game in one completed week.
+    """
+    cache_file = _CACHE_DIR / f"{season}_{week}_{season_type}_dst.json"
+    if cache_file.exists() and (time.time() - cache_file.stat().st_mtime) < _WEEK_CACHE_TTL_SECONDS:
+        return json.loads(cache_file.read_text())
+
+    with httpx.Client(follow_redirects=True) as client:
+        try:
+            events = _get(
+                client,
+                f"{BASE}/seasons/{season}/types/{season_type}/weeks/{week}/events",
+                params={"limit": 32},
+            )
+        except httpx.HTTPError as exc:
+            raise ESPNUnavailableError(f"ESPN core API unreachable for {season} week {week}: {exc}") from exc
+
+        event_ids = [_ref_id(item) for item in events.get("items", [])]
+        if not event_ids:
+            return []
+
+        pending: list[dict] = []
+        for event_id in event_ids:
+            try:
+                comp = _get(client, f"{BASE}/events/{event_id}/competitions/{event_id}")
+            except httpx.HTTPError:
+                continue
+            for c in comp.get("competitors", []):
+                own = TEAM_ID_TO_ABBREV.get(_ref_id(c.get("team")), "")
+                stats_ref = c.get("statistics", {}).get("$ref")
+                if not own or not stats_ref:
+                    continue
+                pending.append({"ref": stats_ref, "team": own})
+
+        def fetch_one(item: dict) -> dict | None:
+            try:
+                doc = _get(client, item["ref"])
+            except httpx.HTTPError:
+                return None
+            return _espn_team_stats_to_dst_stats(doc["splits"], item["team"], week, season)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(16, len(pending)) or 1) as pool:
+            results = list(pool.map(fetch_one, pending))
+
+    rows = [r for r in results if r is not None]
+    cache_file.write_text(json.dumps(rows))
+    return rows
+
+
+def fetch_season_defense_rows(season: int, through_week: int, season_type: int = 2) -> list[dict]:
+    """All completed weeks (1..through_week-1) of team-defense rows,
+    oldest week first. Same stop-on-first-failure behavior as
+    fetch_season_rows above.
+    """
+    rows: list[dict] = []
+    for wk in range(1, through_week):
+        try:
+            rows.extend(fetch_week_team_defense_rows(season, wk, season_type))
+        except ESPNUnavailableError:
+            break
+    return rows
+
+
+def build_dst_game_logs_by_team(rows: list[dict]) -> dict[tuple[str, str], list[dict]]:
+    """{(team_abbreviation, "DST"): [game_stats, ...]}, oldest-first —
+    keyed by team abbreviation, not a display name, since that's what
+    ingestion/slate_builder.py already has on hand for a DST DK row
+    (dk_row.team_abbreviation) without needing to guess how DK spells a
+    given team's DST entry (e.g. "Eagles" vs "Philadelphia Eagles").
+    """
+    logs: dict[tuple[str, str], list[dict]] = {}
+    for row in rows:
+        key = (row["team"], "DST")
+        stats = {k: v for k, v in row.items() if k != "team"}
+        logs.setdefault(key, []).append(stats)
+    return logs

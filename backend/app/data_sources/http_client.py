@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import time
 from pathlib import Path
 from urllib.parse import urlparse
@@ -18,6 +19,16 @@ CACHE_DIR = Path(__file__).parent.parent.parent / ".cache" / "http"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 _last_request_at: dict[str, float] = {}
+# Guards the read-check-sleep-write sequence in _throttle below. Without
+# this, concurrent callers (e.g. slate_builder._fetch_and_apply_weather's
+# ThreadPoolExecutor, one thread per game) all read the same stale
+# `_last_request_at[host]` before any of them writes it back, so the
+# per-host spacing this class exists to enforce silently doesn't apply —
+# confirmed live: 13 near-simultaneous weather calls all hit Open-Meteo in
+# the same instant despite min_interval_seconds=0.5, and got 429'd as a
+# result. Holding the lock across the sleep serializes same-host callers
+# at exactly the intended rate instead of letting them race past it.
+_throttle_lock = threading.Lock()
 
 
 def _cache_key(url: str, params: dict | None) -> str:
@@ -41,12 +52,13 @@ class ThrottledClient:
 
     def _throttle(self, url: str) -> None:
         host = urlparse(url).netloc
-        now = time.monotonic()
-        last = _last_request_at.get(host, 0.0)
-        wait = self.min_interval_seconds - (now - last)
-        if wait > 0:
-            time.sleep(wait)
-        _last_request_at[host] = time.monotonic()
+        with _throttle_lock:
+            now = time.monotonic()
+            last = _last_request_at.get(host, 0.0)
+            wait = self.min_interval_seconds - (now - last)
+            if wait > 0:
+                time.sleep(wait)
+            _last_request_at[host] = time.monotonic()
 
     @retry(
         reraise=True,

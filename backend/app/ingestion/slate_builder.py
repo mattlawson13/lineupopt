@@ -533,6 +533,21 @@ def _load_historical_stats(season: int, week: int) -> tuple[dict, dict, str | No
                 f"Using {len(espn_rows)} real {season} game logs (ESPN) through week {week - 1}; "
                 f"earlier history from {lookup_season}"
             )
+
+    # nflverse's player_stats has never covered team defense at all (not a
+    # staleness gap like the block above — offense-only by design), so DST
+    # game logs have always been empty and projections/nfl/dst.py has
+    # always run on hardcoded league-average constants. ESPN's core API
+    # has real per-game team-defense stats regardless of whether the
+    # nflverse fallback above matched this season or not.
+    if week > 1:
+        try:
+            dst_rows = espn_adapter.fetch_season_defense_rows(season, week)
+        except espn_adapter.ESPNUnavailableError:
+            dst_rows = []
+        if dst_rows:
+            game_logs.update(espn_adapter.build_dst_game_logs_by_team(dst_rows))
+
     return game_logs, fpts_allowed, warning
 
 
@@ -675,7 +690,12 @@ def _build_projections(
         env = game_env_by_game_id.get(dk_row.game_id, {})
         is_home = game is not None and team is not None and game.home_team_id == team.id
 
-        key = (normalize_name(dk_row.display_name), position)
+        # DST rows are keyed by team abbreviation (features/espn_adapter.py's
+        # build_dst_game_logs_by_team), not a normalized display name — DK's
+        # own DST naming ("Eagles" vs "Philadelphia Eagles" vs "PHI") isn't
+        # worth guessing at when dk_row already carries the team abbreviation
+        # directly, already normalized the same way (see line ~276 above).
+        key = (dk_row.team_abbreviation, position) if position == "DST" else (normalize_name(dk_row.display_name), position)
         logs = game_logs.get(key, [])
         season_usage = compute_usage_snapshot(logs)
         recent_usage = compute_usage_snapshot(logs[-3:]) if len(logs) >= 1 else {}
