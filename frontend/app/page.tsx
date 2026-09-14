@@ -9,6 +9,19 @@ import { api, Lineup, PlayerRow, Slate } from "@/lib/api";
 
 type Tab = "build" | "players" | "lineups";
 
+// Slate.name is just "NFL Slate <dk_draft_group_id>" — the raw DK ID isn't
+// meaningful to a person picking a slate, so build a human label from the
+// fields that are (contest format, week, kickoff date) instead of showing it.
+function formatSlateLabel(s: Slate): string {
+  const type = s.contest_type === "showdown" ? "Showdown" : "Classic";
+  const when = new Date(s.start_time_utc).toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "numeric",
+    day: "numeric",
+  });
+  return `${type} — Week ${s.week} (${when})`;
+}
+
 export default function Home() {
   const [tab, setTab] = useState<Tab>("build");
   const [slates, setSlates] = useState<Slate[]>([]);
@@ -67,7 +80,7 @@ export default function Home() {
             >
               {slates.map((s) => (
                 <option key={s.id} value={s.id}>
-                  {s.name} — Week {s.week}
+                  {formatSlateLabel(s)}
                 </option>
               ))}
             </select>
@@ -90,7 +103,7 @@ export default function Home() {
 
       {activeSlate && (
         <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <SummaryCard label="Slate" value={activeSlate.name} />
+          <SummaryCard label="Slate" value={formatSlateLabel(activeSlate)} />
           <SummaryCard label="Week" value={String(activeSlate.week)} />
           <SummaryCard label="Games" value={String(activeSlate.game_ids.length)} />
           <SummaryCard label="Players" value={String(players.length)} />
