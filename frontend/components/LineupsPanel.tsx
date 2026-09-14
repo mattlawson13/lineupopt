@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, Lineup } from "@/lib/api";
 
 // CPT first (Showdown's premium slot leads on DK's own UI); FLEX last so
@@ -23,6 +23,15 @@ export default function LineupsPanel({ lineups, slateId }: { lineups: Lineup[]; 
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [merging, setMerging] = useState(false);
+  const [mergeError, setMergeError] = useState<string | null>(null);
+  const [mergeStats, setMergeStats] = useState<{
+    rows_filled: number;
+    rows_appended: number;
+    lineups_used: number;
+    lineups_total: number;
+  } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => setLocalLineups(lineups), [lineups]);
 
@@ -77,6 +86,25 @@ export default function LineupsPanel({ lineups, slateId }: { lineups: Lineup[]; 
     }
   };
 
+  const handleUploadClick = () => fileInputRef.current?.click();
+
+  const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-selecting the same file next time
+    if (!file) return;
+    setMerging(true);
+    setMergeError(null);
+    setMergeStats(null);
+    try {
+      const stats = await api.mergeDkCsv(slateId, file);
+      setMergeStats(stats);
+    } catch (err: any) {
+      setMergeError(err?.message || String(err));
+    } finally {
+      setMerging(false);
+    }
+  };
+
   if (!localLineups.length) {
     return (
       <div className="rounded-lg border border-surface-border bg-surface-raised p-8 text-center text-sm text-slate-500">
@@ -87,18 +115,26 @@ export default function LineupsPanel({ lineups, slateId }: { lineups: Lineup[]; 
 
   return (
     <div>
-      <div className="mb-4 flex items-center justify-between gap-3">
+      <div className="mb-2 flex items-center justify-between gap-3">
         <span className="text-xs text-slate-500">{localLineups.length} lineups</span>
         <div className="flex items-center gap-2">
           {generateError && <span className="text-[11px] text-danger">{generateError}</span>}
-          {exportError && <span className="text-[11px] text-danger">{exportError}</span>}
+          <input ref={fileInputRef} type="file" accept=".csv" onChange={handleFileSelected} className="hidden" />
+          <button
+            onClick={handleUploadClick}
+            disabled={merging}
+            title="Upload the CSV DraftKings gave you (its Export Player List, or a contest's own bulk-upload template) — get the same file back with your lineups filled in, ready to upload to DK. This is the reliable path; a from-scratch file isn't consistently accepted by DK's own uploader."
+            className="rounded bg-accent px-3 py-1.5 text-xs font-semibold text-surface transition hover:bg-accent-dim disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {merging ? "Filling in…" : "Fill DK Template"}
+          </button>
           <button
             onClick={handleExport}
             disabled={exporting}
-            title="Download a CSV in DraftKings' own bulk-upload format — copy its player columns into DK's downloaded contest-entry template (which has your real Entry ID/Contest ID) alongside it, then upload that to DK"
+            title="Download a from-scratch CSV in DraftKings' roster format. Not reliably accepted by DK's own uploader on its own — prefer 'Fill DK Template' with the file DK gave you."
             className="rounded border border-surface-border bg-surface px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {exporting ? "Exporting…" : "Export to DraftKings"}
+            {exporting ? "Exporting…" : "Export (Preview)"}
           </button>
           <button
             onClick={handleGenerateMore}
@@ -110,6 +146,29 @@ export default function LineupsPanel({ lineups, slateId }: { lineups: Lineup[]; 
           </button>
         </div>
       </div>
+
+      {(mergeError || exportError || mergeStats) && (
+        <div className="mb-4 space-y-1">
+          {mergeError && (
+            <div className="rounded border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">
+              {mergeError}
+            </div>
+          )}
+          {exportError && (
+            <div className="rounded border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">
+              {exportError}
+            </div>
+          )}
+          {mergeStats && (
+            <div className="rounded border border-accent/40 bg-accent/10 px-3 py-2 text-xs text-accent">
+              Filled {mergeStats.rows_filled} existing row{mergeStats.rows_filled === 1 ? "" : "s"}
+              {mergeStats.rows_appended > 0 && `, appended ${mergeStats.rows_appended} more`} — used{" "}
+              {mergeStats.lineups_used} of {mergeStats.lineups_total} lineups. Downloaded, ready to upload to
+              DraftKings.
+            </div>
+          )}
+        </div>
+      )}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {localLineups.map((lu) => (
         <div key={lu.id} className="rounded-lg border border-surface-border bg-surface-raised p-4">

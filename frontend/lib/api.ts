@@ -259,6 +259,42 @@ export const api = {
     a.remove();
     URL.revokeObjectURL(url);
   },
+
+  // The reliable path: fills lineups into the actual file DraftKings gave
+  // the user (its Export Player List / a contest's bulk-upload template),
+  // preserving everything else (Entry ID/Contest ID columns if present,
+  // the player-ID reference table) exactly as DK provided it. A
+  // from-scratch file (exportDkCsv above) isn't reliably accepted by DK's
+  // own uploader on its own.
+  mergeDkCsv: async (slateId: string, file: File) => {
+    const form = new FormData();
+    form.append("slate_id", slateId);
+    form.append("file", file);
+    const res = await fetch(`${API_BASE}/api/lineups/merge_dk_csv`, { method: "POST", body: form });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      throw new Error(body?.detail || `HTTP ${res.status}`);
+    }
+    const blob = await res.blob();
+    const match = res.headers.get("content-disposition")?.match(/filename="([^"]+)"/);
+    const filename = match?.[1] || `dk_upload_${slateId}.csv`;
+    let stats: { rows_filled: number; rows_appended: number; lineups_used: number; lineups_total: number } | null = null;
+    try {
+      stats = JSON.parse(res.headers.get("x-export-stats") || "null");
+    } catch {
+      stats = null;
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    return stats;
+  },
+
   getResolutionSummary: () => getJSON<ResolutionSummaryStats>("/api/resolutions/summary"),
 
   resolveAllSlates: async () => {

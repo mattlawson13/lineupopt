@@ -7,8 +7,9 @@ tweaks" request.
 from __future__ import annotations
 
 import datetime
+import json
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -18,7 +19,12 @@ from app.api.deps import get_db
 from app.api.schemas import ManualOptimizeRequest
 from app.api.serialize import serialize_lineup
 from app.config.loader import get_optimization_settings
-from app.export.dk_csv import MissingDraftableIdError, build_dk_bulk_upload_csv
+from app.export.dk_csv import (
+    MissingDraftableIdError,
+    TemplateFormatError,
+    build_dk_bulk_upload_csv,
+    merge_lineups_into_dk_template,
+)
 from app.ingestion.slate_builder import _compute_correlation_scores, _resolve_contest_calibration
 from app.models.analytics import Correlation, OwnershipProjection, PlayerSimulationResult, SimulationRun
 from app.models.context_data import BettingLine
@@ -44,8 +50,7 @@ def _players_by_id_lookup(db: Session, lineup: Lineup) -> dict:
     return out
 
 
-@router.get("")
-def list_lineups(slate_id: str, optimization_run_id: str | None = None, db: Session = Depends(get_db)):
+def _lineups_for_export(db: Session, slate_id: str, optimization_run_id: str | None) -> list[Lineup]:
     query = select(Lineup).where(Lineup.slate_id == slate_id)
     if optimization_run_id:
         query = query.where(Lineup.optimization_run_id == optimization_run_id)
@@ -55,7 +60,12 @@ def list_lineups(slate_id: str, optimization_run_id: str | None = None, db: Sess
         ).scalars().first()
         if latest_run:
             query = query.where(Lineup.optimization_run_id == latest_run.id)
-    lineups = db.execute(query.order_by(Lineup.ai_rank)).scalars().all()
+    return db.execute(query.order_by(Lineup.ai_rank)).scalars().all()
+
+
+@router.get("")
+def list_lineups(slate_id: str, optimization_run_id: str | None = None, db: Session = Depends(get_db)):
+    lineups = _lineups_for_export(db, slate_id, optimization_run_id)
     return [serialize_lineup(lu, _players_by_id_lookup(db, lu)) for lu in lineups]
 
 
@@ -66,21 +76,17 @@ def export_dk_csv(slate_id: str, optimization_run_id: str | None = None, db: Ses
     slots, each cell "Player Name (dk_draftable_id)" using DK's real
     per-slate upload ID. Defaults to the slate's latest optimization run,
     same as GET /api/lineups.
+
+    NOT reliably accepted by DK's own uploader on its own — confirmed
+    live 2026-09-14. Prefer POST /merge_dk_csv with the actual file DK
+    gave you. This is kept as a preview/fallback for when no such file
+    is available yet.
     """
     slate = db.get(Slate, slate_id)
     if not slate:
         raise HTTPException(404, "Slate not found")
 
-    query = select(Lineup).where(Lineup.slate_id == slate_id)
-    if optimization_run_id:
-        query = query.where(Lineup.optimization_run_id == optimization_run_id)
-    else:
-        latest_run = db.execute(
-            select(OptimizationRun).where(OptimizationRun.slate_id == slate_id).order_by(OptimizationRun.completed_at.desc().nullslast())
-        ).scalars().first()
-        if latest_run:
-            query = query.where(Lineup.optimization_run_id == latest_run.id)
-    lineups = db.execute(query.order_by(Lineup.ai_rank)).scalars().all()
+    lineups = _lineups_for_export(db, slate_id, optimization_run_id)
     if not lineups:
         raise HTTPException(404, "No lineups found for this slate — build or generate lineups first")
 
@@ -92,6 +98,55 @@ def export_dk_csv(slate_id: str, optimization_run_id: str | None = None, db: Ses
         content=csv_text,
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="dk_upload_{slate.dk_draft_group_id}.csv"'},
+    )
+
+
+@router.post("/merge_dk_csv")
+async def merge_dk_csv(
+    file: UploadFile,
+    slate_id: str = Form(...),
+    optimization_run_id: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    """The reliable way to get lineups into DraftKings: upload the actual
+    file DK gave you (its "Export Player List" download, or a contest's
+    own bulk-upload template if you have one), and get the same file
+    back with roster picks filled in — everything else (any Entry ID/
+    Contest ID columns, the player-ID reference table, instructions) is
+    preserved exactly as DK provided it. A from-scratch file
+    (GET /export_dk_csv) isn't reliably accepted by DK's own uploader —
+    confirmed live 2026-09-14 — because DK's real validator expects the
+    shape of whatever it itself handed out, which this app has no way to
+    know in advance without the user's copy of it. See export/dk_csv.py.
+    """
+    slate = db.get(Slate, slate_id)
+    if not slate:
+        raise HTTPException(404, "Slate not found")
+
+    lineups = _lineups_for_export(db, slate_id, optimization_run_id)
+    if not lineups:
+        raise HTTPException(404, "No lineups found for this slate — build or generate lineups first")
+
+    template_bytes = await file.read()
+    try:
+        template_text = template_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(400, "Couldn't read the uploaded file as text — make sure it's the CSV DraftKings gave you")
+
+    try:
+        csv_text, stats = merge_lineups_into_dk_template(template_text, db, slate, lineups)
+    except MissingDraftableIdError as exc:
+        raise HTTPException(409, str(exc))
+    except TemplateFormatError as exc:
+        raise HTTPException(422, str(exc))
+
+    return Response(
+        content=csv_text,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="dk_upload_{slate.dk_draft_group_id}.csv"',
+            "X-Export-Stats": json.dumps(stats),
+        },
     )
 
 
