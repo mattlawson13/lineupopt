@@ -107,14 +107,21 @@ def optimize_single_lineup(
 
     # Salary cap (respecting slot salary multipliers, e.g. Showdown CPT 1.5x)
     salary_by_pid = {p.player_id: p.salary for p in pool}
-    prob += (
-        pulp.lpSum(var * salary_by_pid[pid] * next(s.salary_multiplier for s in rules.slots if s.name == slot) for (pid, slot), var in x.items())
-        <= rules.salary_cap
+    slot_multiplier = {s.name: s.salary_multiplier for s in rules.slots}
+    effective_salary = pulp.lpSum(
+        var * salary_by_pid[pid] * slot_multiplier[slot] for (pid, slot), var in x.items()
     )
+    prob += effective_salary <= rules.salary_cap
     if min_salary_used:
-        prob += (
-            pulp.lpSum(var * salary_by_pid[pid] for (pid, slot), var in x.items()) >= min_salary_used
-        )
+        # Same effective-salary expression as the cap above — a lineup's
+        # reported salary_used already includes the CPT premium, so the
+        # floor has to be measured the same way or it silently under-counts
+        # a Showdown roster's real spend (confirmed live: this constraint
+        # existed but was never wired up anywhere until it was, and its
+        # un-multiplied version let Showdown lineups pass a "$44,000 floor"
+        # while actually spending as little as $35,500 once CPT's 1.5x
+        # premium was correctly applied to the reported total).
+        prob += effective_salary >= min_salary_used
 
     # Locks
     for p in pool:
