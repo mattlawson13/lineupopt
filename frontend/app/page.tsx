@@ -4,10 +4,11 @@ import { useEffect, useState } from "react";
 import BuildSlatePanel from "@/components/BuildSlatePanel";
 import PlayerPoolTable from "@/components/PlayerPoolTable";
 import LineupsPanel from "@/components/LineupsPanel";
+import ResolutionsPanel from "@/components/ResolutionsPanel";
 import PlayerDetailDrawer from "@/components/PlayerDetailDrawer";
 import { api, Lineup, PlayerRow, Slate } from "@/lib/api";
 
-type Tab = "build" | "players" | "lineups";
+type Tab = "build" | "players" | "lineups" | "resolve";
 
 // Slate.name is just "NFL Slate <dk_draft_group_id>" — the raw DK ID isn't
 // meaningful to a person picking a slate, so build a human label from the
@@ -86,7 +87,7 @@ export default function Home() {
             </select>
           )}
           <nav className="flex gap-1 rounded-lg border border-surface-border bg-surface-raised p-1">
-            {(["build", "players", "lineups"] as Tab[]).map((t) => (
+            {(["build", "players", "lineups", "resolve"] as Tab[]).map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -120,6 +121,7 @@ export default function Home() {
           <EmptyState text="No player pool yet — build a slate first." />
         ))}
       {tab === "lineups" && activeSlateId && <LineupsPanel lineups={lineups} slateId={activeSlateId} />}
+      {tab === "resolve" && activeSlateId && <ResolutionsPanel slateId={activeSlateId} />}
 
       {selectedPlayer && activeSlateId && (
         <PlayerDetailDrawer player={selectedPlayer} slateId={activeSlateId} onClose={() => setSelectedPlayer(null)} />

@@ -126,6 +126,31 @@ export interface BuildProgressEvent {
   data: Record<string, unknown>;
 }
 
+export interface ResolutionSummary {
+  slate_resolution_id: string;
+  our_best_actual_points: number;
+  retro_optimal_points: number;
+  retro_optimal_lineup_id: string | null;
+  players_resolved: number;
+  mae: number;
+  bias: number;
+  biggest_misses: { name: string; position: string; projected: number; actual: number; error: number }[];
+}
+
+export interface ResolutionPatterns {
+  note: string;
+  by_contest_type: Record<
+    string,
+    {
+      slates_resolved: number;
+      avg_salary_used_pct: number;
+      stack_type_distribution: Record<string, { count: number; pct: number }>;
+      avg_projection_mae: number;
+      avg_projection_bias: number;
+    }
+  >;
+}
+
 async function getJSON<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`${path} -> HTTP ${res.status}`);
@@ -200,4 +225,12 @@ export const api = {
     if (!res.ok) throw new Error(body?.detail || `HTTP ${res.status}`);
     return body as { lineups: Lineup[]; kept_from_original: number; swapped_slots: number };
   },
+
+  resolveSlate: async (slateId: string) => {
+    const res = await fetch(`${API_BASE}/api/slates/${slateId}/resolve`, { method: "POST" });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body?.detail || `HTTP ${res.status}`);
+    return body as ResolutionSummary;
+  },
+  getResolutionPatterns: () => getJSON<ResolutionPatterns>("/api/resolutions/patterns"),
 };
