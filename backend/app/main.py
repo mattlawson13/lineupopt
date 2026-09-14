@@ -5,7 +5,15 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import routes_backtest, routes_build, routes_imports, routes_lineups, routes_players, routes_slates
+from app.api import (
+    routes_backtest,
+    routes_build,
+    routes_imports,
+    routes_lineups,
+    routes_players,
+    routes_resolutions,
+    routes_slates,
+)
 from app.db.session import create_all
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -41,6 +49,7 @@ app.include_router(routes_players.router)
 app.include_router(routes_lineups.router)
 app.include_router(routes_imports.router)
 app.include_router(routes_backtest.router)
+app.include_router(routes_resolutions.router)
 
 
 @app.get("/api/health")

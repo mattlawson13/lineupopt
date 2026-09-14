@@ -167,9 +167,10 @@ def get_slate_players(slate_id: str, db: Session = Depends(get_db)):
 @router.post("/{slate_id}/resolve")
 def resolve_slate_route(slate_id: str, optimization_run_id: str | None = None, db: Session = Depends(get_db)):
     """Grades a slate's most recent (or a specified) optimization run
-    against real DK points, once nflverse has published that week's final
-    box scores. See ingestion/resolution.py for what this can and can't
-    determine (notably: DST/K aren't resolvable from this data source).
+    against real DK points, once nflverse or ESPN has published that
+    week's final box scores. See ingestion/resolution.py for what this
+    can and can't determine (K isn't resolvable — not projected on either
+    source).
     """
     slate = db.get(Slate, slate_id)
     if not slate:

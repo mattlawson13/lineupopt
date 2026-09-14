@@ -46,6 +46,7 @@ from app.models.slate import DraftKingsPlayer, Slate
 from app.normalization.player_matcher import normalize_name
 from app.optimization.dk_rules import get_contest_rules
 from app.optimization.optimizer import InfeasibleLineupError, OptimizerPlayer, optimize_single_lineup
+from app.optimization.stacking import classify_stack
 from app.projections.nfl.dk_points import compute_dk_points
 from app.projections.nfl.dst import _stat_line as dst_stat_line
 
@@ -203,6 +204,14 @@ def resolve_slate(db: Session, slate_id: str, optimization_run_id: str | None = 
         retro = optimize_single_lineup(optimizer_players, rules)
         retro_optimal_points = retro.objective_total
 
+        # Classified and stored (not just described) so retro-optimal
+        # builds can be aggregated across slates later — see
+        # GET /api/resolutions/patterns — to answer "what does a winning
+        # roster actually look like" (stack shape, salary usage) from our
+        # own real, resolved slates instead of needing external data.
+        players_by_id = {p.player_id: p for p in optimizer_players}
+        stack = classify_stack(retro.assignments, players_by_id)
+
         retro_run = OptimizationRun(
             slate_id=slate_id, objective="retro_optimal", num_lineups_requested=1, num_lineups_generated=1,
             status="completed", settings={"note": "best possible lineup with perfect hindsight (actual DK points)"},
@@ -213,7 +222,8 @@ def resolve_slate(db: Session, slate_id: str, optimization_run_id: str | None = 
             optimization_run_id=retro_run.id, slate_id=slate_id, salary_used=retro.salary_used,
             salary_remaining=rules.salary_cap - retro.salary_used,
             projected_points=retro.objective_total, ceiling=retro.objective_total, floor=retro.objective_total,
-            stack_description="Retro-optimal: best lineup obtainable with perfect hindsight.",
+            stack_type=stack.stack_type.value if stack.stack_type else None,
+            stack_description=f"Retro-optimal: best lineup obtainable with perfect hindsight. {stack.description}",
         )
         db.add(retro_lineup)
         db.flush()
