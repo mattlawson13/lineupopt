@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import datetime
 import logging
 
+from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -14,7 +16,8 @@ from app.api import (
     routes_resolutions,
     routes_slates,
 )
-from app.db.session import create_all
+from app.db.session import SessionLocal, create_all
+from app.ingestion.slate_builder import capture_all_open_slates
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -36,11 +39,52 @@ app.add_middleware(
 )
 
 
+logger = logging.getLogger("app.capture_scheduler")
+
+scheduler = BackgroundScheduler(timezone="UTC")
+
+
+def _run_scheduled_capture() -> None:
+    """Job body for the periodic capture — see capture_all_open_slates for
+    why this needs to run proactively (DraftKings zeroes out salary data
+    once a slate locks, so we have to grab it while the slate is still
+    open). Owns its own DB session and never lets an exception escape,
+    since an uncaught one would silently kill all future scheduled runs.
+    """
+    db = SessionLocal()
+    try:
+        result = capture_all_open_slates(db)
+        if result["newly_captured"] or result["errors"]:
+            logger.info("scheduled capture: %s", result)
+    except Exception:
+        logger.exception("scheduled capture_all_open_slates failed")
+    finally:
+        db.close()
+
+
 @app.on_event("startup")
 def on_startup() -> None:
     # Dev convenience — production deployments should use Alembic
     # migrations (see backend/alembic/) instead of create_all().
     create_all()
+
+    if not scheduler.running:
+        scheduler.add_job(
+            _run_scheduled_capture,
+            "interval",
+            minutes=15,
+            id="capture_open_slates",
+            next_run_time=datetime.datetime.now(datetime.timezone.utc),
+            max_instances=1,
+            coalesce=True,
+        )
+        scheduler.start()
+
+
+@app.on_event("shutdown")
+def on_shutdown() -> None:
+    if scheduler.running:
+        scheduler.shutdown(wait=False)
 
 
 app.include_router(routes_build.router)

@@ -246,6 +246,103 @@ def _fetch_dk_slate(dk_draft_group_id: str | None, csv_text: str | None) -> tupl
     return result.data, "dk_api"
 
 
+class SlateCaptureUnavailableError(RuntimeError):
+    pass
+
+
+def capture_slate_entities(db: Session, dk_draft_group_id: str) -> dict:
+    """Lightweight ingestion: persists a slate's real players/salaries/
+    games (steps 1-2 of run_build_slate) WITHOUT running the rest of the
+    pipeline (Vegas/weather/injuries/projections/simulation/optimization)
+    — cheap enough to run proactively for every currently-open DK slate,
+    not just the ones someone actually clicks Build on.
+
+    Why this exists: confirmed live — DraftKings stops serving real
+    salary data for a draft group once it locks (every player comes back
+    with salary=None). Resolving a slate later requires its real salaries
+    (to build a legal retro-optimal roster under the cap), and once DK
+    stops serving them there is no way to ever get them again. The only
+    way to guarantee a slate stays resolvable is to have already captured
+    its real data while it was still open — see capture_all_open_slates
+    below, the batch counterpart that finds every open slate this hasn't
+    captured yet.
+
+    Raises SlateCaptureUnavailableError (not persisting anything) if the
+    slate's own data already looks locked/corrupt (e.g. zeroed salaries)
+    — capturing garbage would be worse than not capturing at all, since
+    it would look like real cached data to everything downstream.
+    """
+    dk_slate, _source_used = _fetch_dk_slate(dk_draft_group_id, None)
+
+    from app.ingestion.validation import has_blocking_errors, validate_dk_slate
+    validation_issues = validate_dk_slate(dk_slate)
+    if has_blocking_errors(validation_issues):
+        errors = [i for i in validation_issues if i.severity == "error"]
+        raise SlateCaptureUnavailableError(
+            f"{dk_draft_group_id}: blocking data-quality errors, not caching "
+            f"(e.g. {errors[0].message if errors else 'unknown'})"
+        )
+
+    run_id = f"NFL-CAPTURE-{datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d%H%M%S')}"
+    slate, dk_player_rows, team_by_abbrev, game_by_teams = _persist_slate_entities(db, dk_slate, run_id)
+    db.commit()
+    return {
+        "slate_id": slate.id, "dk_draft_group_id": dk_draft_group_id,
+        "teams": len(team_by_abbrev), "games": len(game_by_teams), "players": len(dk_player_rows),
+    }
+
+
+# Same mapping api/routes_slates.py's /available endpoint uses to filter
+# DK's lobby down to the roster formats this app actually builds for —
+# duplicated (not imported) to keep this ingestion module independent of
+# the API layer, since this also runs from the background scheduler
+# (main.py), not just from a request.
+_CAPTURE_SUPPORTED_DK_GAME_TYPES = {"Classic", "Showdown Captain Mode"}
+
+
+def capture_all_open_slates(db: Session) -> dict:
+    """Captures (see capture_slate_entities) every draft group currently
+    listed in DraftKings' live lobby that this app hasn't already
+    captured — run on a schedule (main.py's background job) and available
+    on demand (POST /api/slates/capture_all_open), so a slate's real
+    salary data is saved *before* it can lock and disappear for good,
+    without depending on a person happening to click Build first.
+    """
+    try:
+        contests = DraftKingsApiSource().get_nfl_contests().data
+    except SourceUnavailableError as exc:
+        raise SlateCaptureUnavailableError(f"DraftKings contests endpoint unreachable: {exc}") from exc
+
+    open_draft_groups = {
+        c.dk_draft_group_id for c in contests if c.game_type in _CAPTURE_SUPPORTED_DK_GAME_TYPES
+    }
+    already_captured = {
+        row[0] for row in db.execute(select(Slate.dk_draft_group_id).distinct()).all()
+    }
+    to_capture = open_draft_groups - already_captured
+
+    results = []
+    for dg in to_capture:
+        try:
+            info = capture_slate_entities(db, dg)
+            results.append({"dk_draft_group_id": dg, "status": "captured", **info})
+        except SlateCaptureUnavailableError as exc:
+            db.rollback()
+            results.append({"dk_draft_group_id": dg, "status": "skipped", "detail": str(exc)})
+        except Exception as exc:  # noqa: BLE001 — one bad draft group shouldn't stop the rest
+            db.rollback()
+            results.append({"dk_draft_group_id": dg, "status": "error", "detail": str(exc)})
+
+    return {
+        "open_draft_groups": len(open_draft_groups),
+        "already_captured": len(open_draft_groups) - len(to_capture),
+        "newly_captured": sum(1 for r in results if r["status"] == "captured"),
+        "skipped": sum(1 for r in results if r["status"] == "skipped"),
+        "errors": sum(1 for r in results if r["status"] == "error"),
+        "results": results,
+    }
+
+
 def _persist_slate_entities(db: Session, dk_slate: DraftKingsSlate, run_id: str):
     existing = db.execute(select(Slate).where(Slate.dk_draft_group_id == dk_slate.dk_draft_group_id)).scalar_one_or_none()
     now = datetime.datetime.now(datetime.timezone.utc)

@@ -11,6 +11,7 @@ from app.api.serialize import serialize_game, serialize_player_row, serialize_sl
 from app.data_sources.base import SourceUnavailableError
 from app.data_sources.draftkings import DraftKingsApiSource
 from app.ingestion.resolution import ResolutionUnavailableError, resolve_slate
+from app.ingestion.slate_builder import SlateCaptureUnavailableError, capture_all_open_slates
 from app.models.analytics import OwnershipProjection, PlayerSimulationResult, SimulationRun, SlateResolution
 from app.models.core import Game
 from app.models.projections import EnsembleProjection
@@ -23,6 +24,21 @@ router = APIRouter(prefix="/api/slates", tags=["slates"])
 def list_slates(db: Session = Depends(get_db)):
     slates = db.execute(select(Slate).order_by(Slate.start_time_utc.desc())).scalars().all()
     return [serialize_slate(s) for s in slates]
+
+
+@router.post("/capture_all_open")
+def capture_all_open_slates_route(db: Session = Depends(get_db)):
+    """Saves real player/salary/game data for every DK slate currently
+    open for entry that this app hasn't already captured — before it
+    locks and that data becomes permanently unavailable (see
+    ingestion/slate_builder.py's capture_slate_entities for why). Also
+    runs automatically on a schedule (see main.py); this is the on-demand
+    version of the same thing.
+    """
+    try:
+        return capture_all_open_slates(db)
+    except SlateCaptureUnavailableError as exc:
+        raise HTTPException(503, str(exc))
 
 
 _SUPPORTED_DK_GAME_TYPES = {
