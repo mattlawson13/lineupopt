@@ -14,6 +14,7 @@ import math
 import statistics
 
 from app.config.loader import get_dk_roster_rules, get_ownership_settings
+from app.optimization.eligibility import UNPLAYABLE_PROJECTION_FLOOR
 
 INJURY_SEVERITY = {"healthy": 0.0, "questionable": 1.0, "doubtful": 2.0, "out": 3.0, "ir": 3.0}
 
@@ -73,9 +74,6 @@ def _zscore(values: list[float], value: float) -> float:
     return max(-_ZSCORE_CLIP, min(_ZSCORE_CLIP, z))
 
 
-_UNPLAYABLE_PROJECTION_FLOOR = 1.0
-
-
 def project_ownership(
     players: list[PlayerOwnershipInput], contest_type: str = "classic"
 ) -> list[OwnershipResult]:
@@ -94,11 +92,11 @@ def project_ownership(
     # slate's backup QBs (0.02-0.32 projected points) still came out at
     # 13-20% projected ownership after fixing the position-target bug
     # below, purely from surviving in the softmax competition at all. The
-    # same 1.0-point threshold gates optimizer eligibility — see
-    # ingestion/slate_builder.py's _optimize_lineups — since a player who
+    # same shared floor (optimization/eligibility.py) gates optimizer
+    # eligibility everywhere a player pool gets built, since a player who
     # shouldn't be draftable shouldn't have real projected ownership either.
-    viable = [p for p in players if p.ensemble_projection >= _UNPLAYABLE_PROJECTION_FLOOR]
-    unplayable = [p for p in players if p.ensemble_projection < _UNPLAYABLE_PROJECTION_FLOOR]
+    viable = [p for p in players if p.ensemble_projection >= UNPLAYABLE_PROJECTION_FLOOR]
+    unplayable = [p for p in players if p.ensemble_projection < UNPLAYABLE_PROJECTION_FLOOR]
     floor_results = [
         OwnershipResult(player_id=p.player_id, projected_ownership_pct=cfg["min_ownership_pct"], feature_breakdown={})
         for p in unplayable

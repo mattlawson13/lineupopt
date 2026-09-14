@@ -28,6 +28,7 @@ from app.models.projections import EnsembleProjection, Projection
 from app.models.slate import DraftKingsPlayer, Slate
 from app.optimization.diversification import DiversificationSettings, generate_portfolio
 from app.optimization.dk_rules import get_contest_rules
+from app.optimization.eligibility import is_playable
 from app.optimization.optimizer import OptimizerPlayer
 from app.optimization.stacking import classify_stack
 
@@ -144,6 +145,13 @@ def generate_lineups(req: ManualOptimizeRequest, db: Session = Depends(get_db)):
     for row in dk_rows:
         ens = ensembles.get(row.player_id)
         if not ens or not row.game_id or not row.player_id:
+            continue
+        # Hard eligibility floor — see optimization/eligibility.py for why
+        # this can't just be a soft discount: exposure caps in a thin pool
+        # can otherwise exhaust every real option and force this endpoint
+        # (shared by "Generate More" and late-swap) to pick genuinely
+        # unplayable players just to fill a roster.
+        if not is_playable(ens.ensemble_projection) and row.player_id not in req.locked_player_ids:
             continue
         if req.min_projection and ens.median < req.min_projection:
             continue
@@ -308,6 +316,19 @@ def late_swap_lineup(lineup_id: str, db: Session = Depends(get_db)):
 
     if not started_game_ids:
         raise HTTPException(400, "No games in this slate have started yet — nothing to late-swap")
+    if started_game_ids >= game_ids:
+        # Every game on the slate has started — checked directly against
+        # the slate's own games rather than only inferring it from which
+        # of THIS lineup's players match a started game_id, since a
+        # player-id mismatch (e.g. a rebuild reassigning internal player
+        # records) could otherwise silently under-count locked players and
+        # let this proceed into generate_lineups() with an empty locked
+        # set and (for Showdown's single-game format) almost the entire
+        # pool excluded — confirmed live: exactly that produced a lineup
+        # of six $200-salary, 0-point bench players. A single-game
+        # Showdown slate can never be late-swapped once its one game has
+        # kicked off; this makes that fail loudly and immediately instead.
+        raise HTTPException(400, "Every game in this slate has already started — nothing left to swap")
 
     dk_row_by_player_id = {row.player_id: row for row in dk_rows if row.player_id}
     current_player_ids = {lp.player_id for lp in lineup.players}

@@ -43,6 +43,7 @@ from app.models.slate import DraftKingsPlayer, DraftKingsSalary, Slate
 from app.normalization.player_matcher import get_or_create_player, get_or_create_team, normalize_name, normalize_team_abbreviation
 from app.optimization.diversification import DiversificationSettings, generate_portfolio
 from app.optimization.dk_rules import get_contest_rules
+from app.optimization.eligibility import is_playable
 from app.optimization.optimizer import OptimizerPlayer
 from app.optimization.stacking import classify_stack
 from app.ownership.model import PlayerOwnershipInput, compute_chalk_contrarian_scores, project_ownership
@@ -1165,8 +1166,10 @@ def _optimize_lineups(db, slate, dk_player_rows, ensemble_by_player_id, ownershi
         # Showdown portfolio rostered four separate backup QBs (0.02-0.32
         # projected points) as FLEX once the two real QBs hit their
         # exposure caps. A discount can never fully prevent this — only
-        # removing the player from the eligible pool entirely can.
-        if info["ensemble"].ensemble_projection < 1.0:
+        # removing the player from the eligible pool entirely can. Shared
+        # with ownership/model.py and api/routes_lineups.py's manual
+        # generate/late-swap path — see optimization/eligibility.py.
+        if not is_playable(info["ensemble"].ensemble_projection):
             continue
         ens = info["ensemble"]
         sim = sim_result.player_summaries.get(r.player_id)
