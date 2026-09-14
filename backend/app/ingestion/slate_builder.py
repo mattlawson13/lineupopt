@@ -723,7 +723,20 @@ def _build_projections(
         )
         component = project_player(ctx)
 
-        market = market_projection_from_vegas(position, ctx.implied_team_total, ctx.opponent_implied_total)
+        # market_projection_from_vegas() only knows the position and the
+        # team's implied total — it has no idea WHICH player is nominally
+        # at that position, so on its own it silently assumes whoever it
+        # is will see starter-level, fully-healthy usage. That's wrong for
+        # a backup: e.g. a backup QB behind an expensive starter got the
+        # same ~95%-of-team-implied-total market number as the actual
+        # starter, which (even at the ensemble's modest market weight) was
+        # enough to pull a correctly near-zero model projection up to a
+        # real, biddable number — reported live: a backup QB projected at
+        # 5.5 pts on a $8,600 salary and showing up in generated lineups.
+        # Scaling by the same availability (injury x depth-chart) multiplier
+        # already applied to the model component fixes it at the source
+        # rather than requiring the ensemble weight to be re-tuned.
+        market = market_projection_from_vegas(position, ctx.implied_team_total, ctx.opponent_implied_total) * availability
         sources = SourceProjections(model_projection=component.projected_points, model_std_dev=component.model_uncertainty, market_projection=market)
         ensemble = compute_ensemble(sources, position)
 
