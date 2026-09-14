@@ -27,6 +27,7 @@ from app.data_sources.draftkings import DraftKingsApiSource, DraftKingsCsvSource
 from app.data_sources.injury import InjurySource
 from app.data_sources.nfl_stats import NFLStatsSource
 from app.data_sources.weather import WeatherSource
+from app.features import espn_adapter
 from app.features.game_environment import compute_game_environment
 from app.features.matchup import compute_matchup_zscores
 from app.features.nflverse_adapter import build_fpts_allowed_by_team_position, build_game_logs_by_player
@@ -497,6 +498,27 @@ def _load_historical_stats(season: int, week: int) -> tuple[dict, dict, str | No
     game_logs = build_game_logs_by_player(df, lookup_season, through_week=through, snap_df=snap_df)
     fpts_allowed = build_fpts_allowed_by_team_position(df, lookup_season, through_week=through)
     warning = None if lookup_season == season else f"No {season} data yet — using {lookup_season} historical rates"
+
+    # nflverse hasn't caught up to `season` yet, but real games may already
+    # have been played this season — ESPN's core API (features/espn_adapter.py)
+    # is reachable from this environment and NOT similarly stale, so use it
+    # to fill in the actual completed weeks rather than relying entirely on
+    # last season's rates. Best-effort: any failure here just leaves the
+    # nflverse-only fallback above in place.
+    if lookup_season != season and week > 1:
+        try:
+            espn_rows = espn_adapter.fetch_season_rows(season, week)
+        except espn_adapter.ESPNUnavailableError:
+            espn_rows = []
+        if espn_rows:
+            espn_logs = espn_adapter.build_game_logs_by_player(espn_rows)
+            for key, games in espn_logs.items():
+                game_logs.setdefault(key, []).extend(games)  # appended = most recent, for recency weighting
+            fpts_allowed.update(espn_adapter.build_fpts_allowed_by_team_position(espn_rows))
+            warning = (
+                f"Using {len(espn_rows)} real {season} game logs (ESPN) through week {week - 1}; "
+                f"earlier history from {lookup_season}"
+            )
     return game_logs, fpts_allowed, warning
 
 
