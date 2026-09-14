@@ -14,13 +14,18 @@ Two things come out of this:
      our #1 lineup's real score against this tells you concretely what
      the model missed, rather than just "you scored X."
 
-Known, honest limitation: nflverse's player_stats file is offense-only
-(passing/rushing/receiving) — it has no team defense/special-teams stat
-lines, so DST (and K, which this app doesn't project anyway) can't be
-resolved from this source. Per project policy we don't fabricate a DST
-score; those slots are scored 0 in the retro-optimal solve (so it picks
-the cheapest legal DST rather than pretending to know which one scored
-best) and excluded from the bias/MAE stats entirely.
+Data source: tries nflverse first (get_player_stats), then falls back to
+ESPN's core API (features/espn_adapter.py) — the same source that already
+backfills projections/matchup data for the current season. This matters:
+nflverse has never had 2026 data at all, so without the ESPN fallback
+this whole module would be permanently unusable for any slate built this
+season. ESPN also has real team-defense box scores (unlike nflverse,
+which is offense-only), so DST is resolved from real stats too now — not
+skipped as "unresolvable" the way it used to be here.
+
+K is still excluded (UNRESOLVABLE_POSITIONS) — this app has never
+projected K at all, on either source, so there's no projection to grade
+against; nothing to compare, not a data-availability gap like DST was.
 """
 from __future__ import annotations
 
@@ -31,6 +36,7 @@ from sqlalchemy.orm import Session
 
 from app.data_sources.base import SourceUnavailableError
 from app.data_sources.nfl_stats import NFLStatsSource
+from app.features import espn_adapter
 from app.features.nflverse_adapter import nflverse_row_to_game_stats
 from app.models.analytics import PlayerActualResult, SlateResolution
 from app.models.core import Player
@@ -41,8 +47,9 @@ from app.normalization.player_matcher import normalize_name
 from app.optimization.dk_rules import get_contest_rules
 from app.optimization.optimizer import InfeasibleLineupError, OptimizerPlayer, optimize_single_lineup
 from app.projections.nfl.dk_points import compute_dk_points
+from app.projections.nfl.dst import _stat_line as dst_stat_line
 
-UNRESOLVABLE_POSITIONS = {"DST", "K"}  # see module docstring
+UNRESOLVABLE_POSITIONS = {"K"}  # see module docstring
 
 
 class ResolutionUnavailableError(RuntimeError):
@@ -75,23 +82,58 @@ def resolve_slate(db: Session, slate_id: str, optimization_run_id: str | None = 
     if not run:
         raise ValueError(f"No optimization run found for slate {slate_id}")
 
+    actual_by_norm_name: dict[str, dict] = {}
     try:
         df = NFLStatsSource().get_player_stats(slate.season).data
-    except SourceUnavailableError as exc:
-        raise ResolutionUnavailableError(f"Cannot resolve — nflverse unavailable: {exc}") from exc
+        week_df = df[df["week"] == slate.week]
+        if week_df.empty:
+            raise SourceUnavailableError(f"nflverse has no {slate.season} week {slate.week} rows yet")
+        for _, raw in week_df.iterrows():
+            stat_line = nflverse_row_to_game_stats(raw)
+            actual_by_norm_name[normalize_name(raw["player_display_name"])] = {
+                "points": compute_dk_points(stat_line), "stat_line": stat_line,
+            }
+    except SourceUnavailableError as nflverse_exc:
+        # nflverse has never had 2026 data at all — same ESPN fallback
+        # already used for projections (slate_builder.py's
+        # _load_historical_stats) and matchup ratings all season.
+        try:
+            espn_rows = espn_adapter.fetch_week_player_rows(slate.season, slate.week)
+        except espn_adapter.ESPNUnavailableError as espn_exc:
+            raise ResolutionUnavailableError(
+                f"Cannot resolve — neither nflverse ({nflverse_exc}) nor ESPN ({espn_exc}) has "
+                f"{slate.season} week {slate.week} results yet"
+            ) from espn_exc
+        if not espn_rows:
+            raise ResolutionUnavailableError(
+                f"No {slate.season} week {slate.week} results published yet — the games may not be final"
+            )
+        for row in espn_rows:
+            stat_line = {k: v for k, v in row.items() if k not in ("player_display_name", "position")}
+            actual_by_norm_name[normalize_name(row["player_display_name"])] = {
+                "points": compute_dk_points(stat_line), "stat_line": stat_line,
+            }
 
-    week_df = df[df["week"] == slate.week]
-    if week_df.empty:
-        raise ResolutionUnavailableError(
-            f"No {slate.season} week {slate.week} results published yet — the games may not be final"
-        )
-
-    actual_by_norm_name: dict[str, dict] = {}
-    for _, raw in week_df.iterrows():
-        stat_line = nflverse_row_to_game_stats(raw)
-        actual_by_norm_name[normalize_name(raw["player_display_name"])] = {
-            "points": compute_dk_points(stat_line), "stat_line": stat_line,
+    # DST: nflverse has never had team-defense stats at all (offense-only
+    # by design) — ESPN is the only source for this regardless of which
+    # source handled skill positions above, so it's always attempted
+    # separately. Best-effort: a team simply stays unresolved (falls back
+    # to the same "0 points" convention as any unmatched player below)
+    # rather than failing the whole resolution.
+    actual_dst_by_team: dict[str, dict] = {}
+    try:
+        dst_rows = espn_adapter.fetch_week_team_defense_rows(slate.season, slate.week)
+    except espn_adapter.ESPNUnavailableError:
+        dst_rows = []
+    for row in dst_rows:
+        usage = {
+            "sacks_pg": row["sacks"], "interceptions_pg": row["interceptions"],
+            "fumble_recoveries_pg": row["fumble_recoveries"], "def_td_pg": row["def_td"],
+            "safety_pg": row["safety"], "blocked_kick_pg": row["blocked_kick"],
+            "return_td_pg": row["return_td"], "points_allowed_pg": row["points_allowed"],
         }
+        stat_line = dst_stat_line(usage, row["points_allowed"])
+        actual_dst_by_team[row["team"]] = {"points": compute_dk_points(stat_line), "stat_line": stat_line}
 
     dk_rows = db.execute(select(DraftKingsPlayer).where(DraftKingsPlayer.slate_id == slate_id)).scalars().all()
     ensembles = {
@@ -108,8 +150,10 @@ def resolve_slate(db: Session, slate_id: str, optimization_run_id: str | None = 
     for row in dk_rows:
         if not row.player_id or row.dk_position in UNRESOLVABLE_POSITIONS:
             continue
-        norm = normalize_name(row.display_name)
-        match = actual_by_norm_name.get(norm)
+        if row.dk_position == "DST":
+            match = actual_dst_by_team.get(row.team_abbreviation)
+        else:
+            match = actual_by_norm_name.get(normalize_name(row.display_name))
         # No row in the box score reads as 0 DK points (inactive/DNP/zero
         # involvement, which is the overwhelmingly common case) rather
         # than as a resolution failure — we can't fully distinguish that
@@ -135,9 +179,9 @@ def resolve_slate(db: Session, slate_id: str, optimization_run_id: str | None = 
                 "projected": projected, "actual": points, "error": error,
             })
 
-    # DST/K get 0 in the retro-optimal solve (never claim to know which
-    # one scored best — see module docstring) so the solver just spends
-    # the least it has to on them.
+    # K still gets 0 in the retro-optimal solve (never projected on either
+    # source — see module docstring) so the solver just spends the least
+    # it has to there. DST is populated for real above now.
     for row in dk_rows:
         if row.dk_position in UNRESOLVABLE_POSITIONS and row.player_id:
             actual_points_by_player_id.setdefault(row.player_id, 0.0)
