@@ -175,11 +175,19 @@ def generate_lineups(req: ManualOptimizeRequest, db: Session = Depends(get_db)):
             team_totals[row.team_abbreviation] = bl.implied_total_home if is_home else bl.implied_total_away
         stack_teams = [t for t, _ in sorted(team_totals.items(), key=lambda kv: kv[1], reverse=True)] or None
 
+    seed_exclude_lineups = None
+    if req.exclude_lineup_ids:
+        existing_lineups = db.execute(
+            select(Lineup).where(Lineup.id.in_(req.exclude_lineup_ids))
+        ).scalars().all()
+        seed_exclude_lineups = [{lp.player_id for lp in lu.players} for lu in existing_lineups]
+
     portfolio = generate_portfolio(
         optimizer_players, rules, req.num_lineups, diversification,
         forced_team_min_counts=req.forced_team_min_counts or None,
         forced_qb_stack_teams=stack_teams,
         randomness_pct=mode_cfg.get("randomness_pct", 0.0), seed=req.seed,
+        seed_exclude_lineups=seed_exclude_lineups,
     )
 
     players_by_id = {p.player_id: p for p in optimizer_players}

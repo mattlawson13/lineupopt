@@ -49,6 +49,7 @@ def generate_portfolio(
     forced_qb_stack_teams: list[str] | None = None,
     randomness_pct: float = 0.0,
     seed: int | None = None,
+    seed_exclude_lineups: list[set[str]] | None = None,
 ) -> PortfolioResult:
     """`forced_qb_stack_teams`, when given, is cycled through one team per
     lineup (index i uses `forced_qb_stack_teams[i % len(...)]`) so a GPP
@@ -56,11 +57,17 @@ def generate_portfolio(
     (spec section 16) instead of leaving correlation to emerge from a
     linear objective, which under-selects it. Pass None/[] for stack-
     agnostic modes (e.g. cash, which optimizes floor/consistency instead).
+
+    `seed_exclude_lineups`: player-id sets for lineups that already exist
+    (e.g. from an earlier build/generate call) — seeds the same overlap
+    constraint this function already enforces *within* one portfolio, so
+    a fresh batch stays genuinely different from lineups you already have
+    from the very first one generated, not just from each other.
     """
     rng = np.random.default_rng(seed)
     warnings: list[str] = []
     lineups: list[LineupResult] = []
-    previous_player_sets: list[set[str]] = []
+    previous_player_sets: list[set[str]] = list(seed_exclude_lineups or [])
 
     exposure_count: dict[str, int] = {p.player_id: 0 for p in players}
     team_count: dict[str, int] = {}

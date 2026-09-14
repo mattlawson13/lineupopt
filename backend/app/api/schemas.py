@@ -24,6 +24,11 @@ class ManualOptimizeRequest(BaseModel):
     dk_contest_id: str | None = None
     locked_player_ids: list[str] = []
     excluded_player_ids: list[str] = []
+    # Lineup IDs (e.g. from an earlier build/generate call) the new batch
+    # should stay meaningfully different from — same overlap rule the
+    # portfolio already enforces on itself, applied against lineups you
+    # already have so a fresh batch doesn't just reproduce them.
+    exclude_lineup_ids: list[str] = []
     forced_team_min_counts: dict[str, int] = {}
     min_projection: float | None = None
     max_ownership_pct: float | None = None
