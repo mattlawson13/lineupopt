@@ -10,6 +10,7 @@ silently fail, but never let one flaky source block everything either).
 """
 from __future__ import annotations
 
+import concurrent.futures
 import dataclasses
 import datetime
 import logging
@@ -377,39 +378,70 @@ def _fetch_and_apply_weather(db: Session, game_by_teams: dict) -> list[str]:
     source = WeatherSource()
     from app.models.context_data import Weather
 
-    for game in game_by_teams.values():
+    def _fetch_one(game):
         home_abbrev = game.home_team.abbreviation
         is_dome = home_abbrev in DOME_TEAMS
         coords = TEAM_STADIUM_COORDS.get(home_abbrev)
         if not coords:
-            warnings.append(f"No stadium coordinates for {home_abbrev}")
-            continue
+            return game, None, f"No stadium coordinates for {home_abbrev}"
         try:
             result = source.get_forecast_for_kickoff(coords[0], coords[1], game.kickoff_utc, is_dome=is_dome)
-            f = result.data
-            db.add(Weather(
-                game_id=game.id, temperature_f=f.temperature_f, wind_mph=f.wind_mph,
-                wind_direction_deg=f.wind_direction_deg, precipitation_pct=f.precipitation_pct,
-                precipitation_type=f.precipitation_type, humidity_pct=f.humidity_pct, is_forecast=True,
-            ))
+            return game, result.data, None
         except SourceUnavailableError as exc:
-            warnings.append(str(exc))
+            return game, None, str(exc)
+
+    games = list(game_by_teams.values())
+    # Each game's forecast is an independent HTTP call (different stadium
+    # coordinates) with no dependency on any other game, but fetching them
+    # one at a time was the single largest chunk of a build's wall-clock
+    # time — ~20s of a ~44s build on a full 13-game slate — despite every
+    # call succeeding. Unlike the ESPN injury case (dead time from calls
+    # guaranteed to fail), this is real, successful work; the fix is
+    # concurrency, not a circuit breaker. DB writes stay on the main
+    # thread/session afterward — SQLAlchemy sessions aren't thread-safe.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(games)) or 1) as pool:
+        results = list(pool.map(_fetch_one, games))
+
+    for game, forecast, warning in results:
+        if warning:
+            warnings.append(warning)
+            continue
+        db.add(Weather(
+            game_id=game.id, temperature_f=forecast.temperature_f, wind_mph=forecast.wind_mph,
+            wind_direction_deg=forecast.wind_direction_deg, precipitation_pct=forecast.precipitation_pct,
+            precipitation_type=forecast.precipitation_type, humidity_pct=forecast.humidity_pct, is_forecast=True,
+        ))
     return warnings
+
+
+_INJURY_CIRCUIT_BREAKER_THRESHOLD = 2  # see comment below
 
 
 def _fetch_injuries(db: Session, team_abbrevs) -> tuple[dict, str | None]:
     source = InjurySource()
     out: dict[str, str] = {}
     failures = 0
-    for abbrev in team_abbrevs:
+    attempted = 0
+    team_list = list(team_abbrevs)
+    for abbrev in team_list:
+        attempted += 1
         try:
             result = source.get_team_injuries(abbrev)
             for row in result.data:
                 out[normalize_name(row.player_name)] = row.status
         except SourceUnavailableError:
             failures += 1
+            # ESPN's block (Akamai bot protection on some hosting IP
+            # ranges) is host-wide, not per-team, so once a couple of
+            # teams fail identically the rest are guaranteed to fail the
+            # same way. Without this, a 24-32 team Classic slate burned
+            # 20-30+ seconds of enforced per-request spacing (1s/team)
+            # on calls that could never succeed — pure dead time on every
+            # single build.
+            if failures >= _INJURY_CIRCUIT_BREAKER_THRESHOLD and failures == attempted:
+                break
     warning = None
-    if failures == len(list(team_abbrevs)) and failures > 0:
+    if failures > 0 and failures == attempted:
         warning = "ESPN injury endpoint unreachable from this environment — assuming all players healthy unless manually reported"
 
     # Manual reports (POST /api/injuries/import) always win over the live
