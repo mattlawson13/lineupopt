@@ -79,6 +79,26 @@ def resolve_all_slates(db: Session = Depends(get_db)):
     }
 
 
+@router.get("/summary")
+def get_resolution_summary(db: Session = Depends(get_db)):
+    """One-shot overall accuracy headline (slates resolved, avg MAE/bias)
+    across every resolved slate regardless of contest type — deliberately
+    separate from /patterns above (which breaks down by contest type and
+    does real per-lineup stack-distribution work) so a lightweight, always-
+    visible "track record" banner in the UI header doesn't have to fetch
+    or aggregate the heavier payload just to show one headline number.
+    """
+    resolutions = db.execute(select(SlateResolution)).scalars().all()
+    if not resolutions:
+        return {"slates_resolved": 0, "avg_projection_mae": None, "avg_projection_bias": None}
+
+    return {
+        "slates_resolved": len(resolutions),
+        "avg_projection_mae": round(sum(r.mae for r in resolutions) / len(resolutions), 2),
+        "avg_projection_bias": round(sum(r.bias for r in resolutions) / len(resolutions), 2),
+    }
+
+
 @router.get("/patterns")
 def get_resolution_patterns(db: Session = Depends(get_db)):
     resolutions = db.execute(select(SlateResolution)).scalars().all()

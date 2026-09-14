@@ -6,7 +6,7 @@ import PlayerPoolTable from "@/components/PlayerPoolTable";
 import LineupsPanel from "@/components/LineupsPanel";
 import ResolutionsPanel from "@/components/ResolutionsPanel";
 import PlayerDetailDrawer from "@/components/PlayerDetailDrawer";
-import { api, Lineup, PlayerRow, Slate } from "@/lib/api";
+import { api, Lineup, PlayerRow, ResolutionSummaryStats, Slate } from "@/lib/api";
 
 type Tab = "build" | "players" | "lineups" | "resolve";
 
@@ -31,6 +31,7 @@ export default function Home() {
   const [lineups, setLineups] = useState<Lineup[]>([]);
   const [selectedPlayer, setSelectedPlayer] = useState<PlayerRow | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [trackRecord, setTrackRecord] = useState<ResolutionSummaryStats | null>(null);
 
   useEffect(() => {
     api
@@ -40,6 +41,7 @@ export default function Home() {
         if (s.length && !activeSlateId) setActiveSlateId(s[0].id);
       })
       .catch((e) => setError(String(e)));
+    api.getResolutionSummary().then(setTrackRecord).catch(() => setTrackRecord(null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -70,6 +72,7 @@ export default function Home() {
             LineupOpt <span className="text-accent">NFL DFS</span>
           </h1>
           <p className="text-xs text-slate-500">Projection, simulation & optimization platform</p>
+          <TrackRecordBadge stats={trackRecord} onClick={() => setTab("resolve")} />
         </div>
 
         <div className="flex items-center gap-3">
@@ -127,6 +130,42 @@ export default function Home() {
         <PlayerDetailDrawer player={selectedPlayer} slateId={activeSlateId} onClose={() => setSelectedPlayer(null)} />
       )}
     </main>
+  );
+}
+
+function TrackRecordBadge({
+  stats,
+  onClick,
+}: {
+  stats: ResolutionSummaryStats | null;
+  onClick: () => void;
+}) {
+  if (!stats || stats.slates_resolved === 0) return null;
+  return (
+    <button
+      onClick={onClick}
+      title="Real projection accuracy, graded against final DK stats — click to see details"
+      className="mt-1.5 flex items-center gap-1.5 rounded-full border border-accent/30 bg-accent/10 px-2.5 py-1 text-[11px] font-medium text-accent transition hover:border-accent/60 hover:bg-accent/20"
+    >
+      <span className="mono-num">
+        {stats.slates_resolved} slate{stats.slates_resolved === 1 ? "" : "s"} resolved
+      </span>
+      {stats.avg_projection_mae !== null && (
+        <>
+          <span className="text-accent/40">·</span>
+          <span className="mono-num">MAE {stats.avg_projection_mae.toFixed(2)}</span>
+        </>
+      )}
+      {stats.avg_projection_bias !== null && (
+        <>
+          <span className="text-accent/40">·</span>
+          <span className="mono-num">
+            bias {stats.avg_projection_bias > 0 ? "+" : ""}
+            {stats.avg_projection_bias.toFixed(2)}
+          </span>
+        </>
+      )}
+    </button>
   );
 }
 

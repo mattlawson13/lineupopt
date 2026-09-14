@@ -137,6 +137,12 @@ export interface ResolutionSummary {
   biggest_misses: { name: string; position: string; projected: number; actual: number; error: number }[];
 }
 
+export interface ResolutionSummaryStats {
+  slates_resolved: number;
+  avg_projection_mae: number | null;
+  avg_projection_bias: number | null;
+}
+
 export interface ResolutionPatterns {
   note: string;
   by_contest_type: Record<
@@ -233,6 +239,7 @@ export const api = {
     return body as ResolutionSummary;
   },
   getResolutionPatterns: () => getJSON<ResolutionPatterns>("/api/resolutions/patterns"),
+  getResolutionSummary: () => getJSON<ResolutionSummaryStats>("/api/resolutions/summary"),
 
   resolveAllSlates: async () => {
     const res = await fetch(`${API_BASE}/api/resolutions/resolve_all`, { method: "POST" });
