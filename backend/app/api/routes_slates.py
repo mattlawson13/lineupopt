@@ -108,32 +108,6 @@ def list_contests_for_draft_group(dk_draft_group_id: str):
     ]
 
 
-@router.post("/{slate_id}/_recompute_week")
-def _recompute_week_one_off(slate_id: str, db: Session = Depends(get_db)):
-    """TEMPORARY one-off maintenance endpoint — corrects a slate (and its
-    games) already persisted under the old, buggy week estimate
-    (_estimate_nfl_week's hardcoded "season starts Sept 4th") to the real
-    week from ESPN's own schedule (_resolve_nfl_week). New slates already
-    get the correct week at creation as of this same change; this only
-    exists to fix the couple of slates built earlier today before the fix
-    landed. Safe to delete once run for those.
-    """
-    from app.ingestion.slate_builder import _resolve_nfl_week
-
-    slate = db.get(Slate, slate_id)
-    if not slate:
-        raise HTTPException(404, "Slate not found")
-    correct_week = _resolve_nfl_week(slate.season, slate.start_time_utc)
-    old_week = slate.week
-    slate.week = correct_week
-    games = [db.get(Game, gid) for gid in slate.game_ids]
-    for g in games:
-        if g:
-            g.week = correct_week
-    db.commit()
-    return {"slate_id": slate.id, "old_week": old_week, "new_week": correct_week, "games_updated": len(games)}
-
-
 @router.get("/{slate_id}")
 def get_slate(slate_id: str, db: Session = Depends(get_db)):
     slate = db.get(Slate, slate_id)
