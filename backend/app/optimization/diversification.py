@@ -24,6 +24,42 @@ from app.optimization.optimizer import (
 logger = logging.getLogger("lineupopt.optimization")
 
 
+def _solve_one_lineup(
+    pool, rules, forced_team_min_counts, stack_team, previous_player_sets,
+    effective_max_overlap, min_salary_used, lineup_index: int, warnings: list[str],
+) -> LineupResult:
+    """Tries the strictest constraint combination first (forced stack +
+    salary floor), then relaxes one constraint at a time rather than
+    aborting the whole portfolio the moment either one doesn't fit this
+    lineup's shrunken, exposure-capped pool — a later lineup in a big
+    batch has fewer eligible players left than the first one did. Every
+    relaxation is reported, never silent.
+    """
+    attempts: list[dict] = []
+    if stack_team:
+        attempts.append({"forced_qb_stack_team": stack_team, "min_salary_used": min_salary_used})
+    attempts.append({"forced_qb_stack_team": None, "min_salary_used": min_salary_used})
+    if min_salary_used:
+        attempts.append({"forced_qb_stack_team": None, "min_salary_used": None})
+
+    last_exc: InfeasibleLineupError | None = None
+    for kwargs in attempts:
+        try:
+            lineup = optimize_single_lineup(
+                pool, rules, forced_team_min_counts=forced_team_min_counts,
+                exclude_lineups=previous_player_sets, max_overlap=effective_max_overlap, **kwargs,
+            )
+        except InfeasibleLineupError as exc:
+            last_exc = exc
+            continue
+        if stack_team and kwargs["forced_qb_stack_team"] is None:
+            warnings.append(f"Lineup {lineup_index + 1}: {stack_team} stack infeasible, generated unstacked instead")
+        elif min_salary_used and kwargs["min_salary_used"] is None:
+            warnings.append(f"Lineup {lineup_index + 1}: relaxed the minimum-salary floor to stay feasible")
+        return lineup
+    raise last_exc  # every attempt failed — let the caller decide whether to stop the portfolio
+
+
 @dataclasses.dataclass
 class DiversificationSettings:
     max_player_exposure_pct: float = 40.0
@@ -50,6 +86,7 @@ def generate_portfolio(
     randomness_pct: float = 0.0,
     seed: int | None = None,
     seed_exclude_lineups: list[set[str]] | None = None,
+    min_salary_used: int | None = None,
 ) -> PortfolioResult:
     """`forced_qb_stack_teams`, when given, is cycled through one team per
     lineup (index i uses `forced_qb_stack_teams[i % len(...)]`) so a GPP
@@ -63,6 +100,16 @@ def generate_portfolio(
     constraint this function already enforces *within* one portfolio, so
     a fresh batch stays genuinely different from lineups you already have
     from the very first one generated, not just from each other.
+
+    `min_salary_used`: the ILP already supported this constraint
+    (optimizer.py) but nothing ever passed it, so nothing stopped a
+    lineup from leaving a large chunk of the cap completely unspent —
+    confirmed live on a real Showdown build: lineups leaving 28-41% of a
+    $50,000 cap unused, real lost expected points, not a deliberate
+    "stars and scrubs" build (which leaves at most a few hundred dollars,
+    not $15-20K). Relaxed automatically (see _solve_one_lineup) rather
+    than aborting the portfolio if a later, exposure-thinned lineup can't
+    meet it.
     """
     rng = np.random.default_rng(seed)
     warnings: list[str] = []
@@ -94,33 +141,13 @@ def generate_portfolio(
 
         stack_team = forced_qb_stack_teams[i % len(forced_qb_stack_teams)] if forced_qb_stack_teams else None
         try:
-            lineup = optimize_single_lineup(
-                pool,
-                rules,
-                forced_team_min_counts=forced_team_min_counts,
-                forced_qb_stack_team=stack_team,
-                exclude_lineups=previous_player_sets,
-                max_overlap=effective_max_overlap,
+            lineup = _solve_one_lineup(
+                pool, rules, forced_team_min_counts, stack_team, previous_player_sets,
+                effective_max_overlap, min_salary_used, i, warnings,
             )
         except InfeasibleLineupError as exc:
-            if stack_team:
-                # That specific team's stack isn't buildable under the
-                # current exposure/overlap constraints (e.g. its pass-
-                # catchers are already exposure-capped) — fall back to an
-                # unstacked solve for this slot rather than abandoning the
-                # rest of the portfolio.
-                try:
-                    lineup = optimize_single_lineup(
-                        pool, rules, forced_team_min_counts=forced_team_min_counts,
-                        exclude_lineups=previous_player_sets, max_overlap=effective_max_overlap,
-                    )
-                    warnings.append(f"Lineup {i + 1}: {stack_team} stack infeasible, generated unstacked instead")
-                except InfeasibleLineupError as exc2:
-                    warnings.append(f"Stopped after {len(lineups)}/{num_lineups} lineups — solver infeasible: {exc2}")
-                    break
-            else:
-                warnings.append(f"Stopped after {len(lineups)}/{num_lineups} lineups — solver infeasible: {exc}")
-                break
+            warnings.append(f"Stopped after {len(lineups)}/{num_lineups} lineups — solver infeasible: {exc}")
+            break
 
         lineups.append(lineup)
         previous_player_sets.append(lineup.player_ids)

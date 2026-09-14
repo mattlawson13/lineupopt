@@ -2,18 +2,35 @@ solver: CBC
 time_limit_seconds: 20
 
 contest_modes:
+  # min_salary_pct: floor on how much of the salary cap a lineup must use
+  # (as a fraction), enforced by the ILP (optimizer.py's min_salary_used)
+  # and relaxed automatically per-lineup only if a later, exposure-capped
+  # portfolio slot genuinely can't meet it (diversification.py's
+  # _solve_one_lineup). Without this, nothing stopped a lineup from
+  # leaving a large chunk of the cap unspent — confirmed live: real
+  # Showdown lineups leaving 28-41% of a $50,000 cap completely unused,
+  # far beyond any real "stars and scrubs" GPP build (which leaves at
+  # most a few hundred dollars, not $15-20K). cash/single_entry sit
+  # highest since there's no legitimate reason to leave cap unspent when
+  # optimizing for consistency; large_field_gpp is loosest to still allow
+  # a genuine high-variance punt build, but nowhere near what was
+  # happening unconstrained.
   cash:
     objective_weights: {median: 0.55, floor: 0.35, projection: 0.10, ceiling: 0.0}
     randomness_pct: 0.0
+    min_salary_pct: 0.97
   single_entry:
     objective_weights: {projection: 0.30, ceiling: 0.30, leverage: 0.20, correlation: 0.20}
     randomness_pct: 3.0
+    min_salary_pct: 0.95
   small_field_gpp:
     objective_weights: {ceiling: 0.40, projection: 0.20, correlation: 0.25, leverage: 0.15}
     randomness_pct: 5.0
+    min_salary_pct: 0.92
   large_field_gpp:
     objective_weights: {ceiling: 0.35, leverage: 0.25, uniqueness: 0.15, correlation: 0.15, volatility: 0.10}
     randomness_pct: 8.0
+    min_salary_pct: 0.88
 
 default_diversification:
   max_player_exposure_pct: 40.0

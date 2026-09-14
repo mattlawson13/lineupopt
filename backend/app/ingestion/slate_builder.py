@@ -1036,10 +1036,12 @@ def _optimize_lineups(db, slate, dk_player_rows, ensemble_by_player_id, ownershi
                 )
         stack_teams = [t for t, _ in sorted(team_totals.items(), key=lambda kv: kv[1], reverse=True)] or None
 
+    min_salary_used = round(rules.salary_cap * mode_cfg.get("min_salary_pct", 0.0)) or None
     portfolio = generate_portfolio(
         optimizer_players, rules, options.num_lineups, diversification,
         forced_qb_stack_teams=stack_teams,
         randomness_pct=mode_cfg.get("randomness_pct", 0.0), seed=options.seed,
+        min_salary_used=min_salary_used,
     )
 
     lineups = []

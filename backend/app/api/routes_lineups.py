@@ -182,12 +182,13 @@ def generate_lineups(req: ManualOptimizeRequest, db: Session = Depends(get_db)):
         ).scalars().all()
         seed_exclude_lineups = [{lp.player_id for lp in lu.players} for lu in existing_lineups]
 
+    min_salary_used = round(rules.salary_cap * mode_cfg.get("min_salary_pct", 0.0)) or None
     portfolio = generate_portfolio(
         optimizer_players, rules, req.num_lineups, diversification,
         forced_team_min_counts=req.forced_team_min_counts or None,
         forced_qb_stack_teams=stack_teams,
         randomness_pct=mode_cfg.get("randomness_pct", 0.0), seed=req.seed,
-        seed_exclude_lineups=seed_exclude_lineups,
+        seed_exclude_lineups=seed_exclude_lineups, min_salary_used=min_salary_used,
     )
 
     players_by_id = {p.player_id: p for p in optimizer_players}
