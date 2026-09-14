@@ -88,7 +88,7 @@ def resolve_slate(db: Session, slate_id: str, optimization_run_id: str | None = 
         else db.execute(
             select(OptimizationRun)
             .where(OptimizationRun.slate_id == slate_id, OptimizationRun.objective != "retro_optimal")
-            .order_by(OptimizationRun.completed_at.desc())
+            .order_by(OptimizationRun.completed_at.desc().nullslast())
         ).scalars().first()
     )
 

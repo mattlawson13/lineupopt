@@ -51,7 +51,7 @@ def list_lineups(slate_id: str, optimization_run_id: str | None = None, db: Sess
         query = query.where(Lineup.optimization_run_id == optimization_run_id)
     else:
         latest_run = db.execute(
-            select(OptimizationRun).where(OptimizationRun.slate_id == slate_id).order_by(OptimizationRun.completed_at.desc())
+            select(OptimizationRun).where(OptimizationRun.slate_id == slate_id).order_by(OptimizationRun.completed_at.desc().nullslast())
         ).scalars().first()
         if latest_run:
             query = query.where(Lineup.optimization_run_id == latest_run.id)
@@ -76,7 +76,7 @@ def export_dk_csv(slate_id: str, optimization_run_id: str | None = None, db: Ses
         query = query.where(Lineup.optimization_run_id == optimization_run_id)
     else:
         latest_run = db.execute(
-            select(OptimizationRun).where(OptimizationRun.slate_id == slate_id).order_by(OptimizationRun.completed_at.desc())
+            select(OptimizationRun).where(OptimizationRun.slate_id == slate_id).order_by(OptimizationRun.completed_at.desc().nullslast())
         ).scalars().first()
         if latest_run:
             query = query.where(Lineup.optimization_run_id == latest_run.id)
@@ -120,7 +120,7 @@ def generate_lineups(req: ManualOptimizeRequest, db: Session = Depends(get_db)):
     }
     ownerships = {o.player_id: o for o in db.execute(select(OwnershipProjection).where(OwnershipProjection.slate_id == req.slate_id)).scalars().all()}
     latest_sim = db.execute(
-        select(SimulationRun).where(SimulationRun.slate_id == req.slate_id).order_by(SimulationRun.completed_at.desc())
+        select(SimulationRun).where(SimulationRun.slate_id == req.slate_id).order_by(SimulationRun.completed_at.desc().nullslast())
     ).scalars().first()
     sim_by_player = {}
     if latest_sim:

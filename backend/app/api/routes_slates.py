@@ -176,7 +176,7 @@ def get_slate_players(slate_id: str, db: Session = Depends(get_db)):
         for o in db.execute(select(OwnershipProjection).where(OwnershipProjection.slate_id == slate_id).order_by(OwnershipProjection.created_at)).scalars().all()
     }
     latest_sim = db.execute(
-        select(SimulationRun).where(SimulationRun.slate_id == slate_id).order_by(SimulationRun.completed_at.desc())
+        select(SimulationRun).where(SimulationRun.slate_id == slate_id).order_by(SimulationRun.completed_at.desc().nullslast())
     ).scalars().first()
     sim_by_player = {}
     if latest_sim:

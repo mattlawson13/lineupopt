@@ -30,7 +30,7 @@ def get_player_detail(player_id: str, slate_id: str, db: Session = Depends(get_d
         .order_by(OwnershipProjection.created_at.desc())
     ).scalars().first()
     latest_sim = db.execute(
-        select(SimulationRun).where(SimulationRun.slate_id == slate_id).order_by(SimulationRun.completed_at.desc())
+        select(SimulationRun).where(SimulationRun.slate_id == slate_id).order_by(SimulationRun.completed_at.desc().nullslast())
     ).scalars().first()
     sim_result = None
     if latest_sim:
