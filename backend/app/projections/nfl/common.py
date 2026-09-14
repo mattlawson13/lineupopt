@@ -63,6 +63,7 @@ class ComponentProjection:
     matchup_adjustment: float
     weather_adjustment: float
     injury_adjustment: float
+    snap_trend_adjustment: float = 0.0  # default 0.0 so kicker.py/dst.py (no snap-share signal) don't need updating
 
     @property
     def projected_points(self) -> float:
@@ -72,7 +73,8 @@ class ComponentProjection:
             + self.usage_adjustment
             + self.matchup_adjustment
             + self.weather_adjustment
-            + self.injury_adjustment,
+            + self.injury_adjustment
+            + self.snap_trend_adjustment,
             2,
         )
 
@@ -99,6 +101,7 @@ class ComponentProjection:
             "matchup_adjustment": round(self.matchup_adjustment, 2),
             "weather_adjustment": round(self.weather_adjustment, 2),
             "injury_adjustment": round(self.injury_adjustment, 2),
+            "snap_trend_adjustment": round(self.snap_trend_adjustment, 2),
             "model_uncertainty": self.model_uncertainty,
             "stat_line": self.stat_line,
         }
@@ -128,6 +131,31 @@ def usage_trend_delta(ctx: PlayerProjectionContext, base_stat_points_fn) -> floa
 
 def matchup_delta(ctx: PlayerProjectionContext, sensitivity: float) -> float:
     return ctx.matchup_zscore * sensitivity
+
+
+def snap_trend_delta(ctx: PlayerProjectionContext, base_points: float, damping: float = 0.5) -> float:
+    """Scales the projection by how much recent offensive snap share has
+    moved relative to the season rate — a genuinely separate signal from
+    usage_trend_delta above (targets/touches), and typically a *leading*
+    one: a back or receiver's snap count usually shifts a game or two
+    before their target/touch share catches up, so this can catch a real
+    role change usage_trend_delta hasn't shown yet.
+
+    Requires nflverse's snap_counts release to have cross-referenced
+    successfully for this player (see build_game_logs_by_player's
+    snap_df param) — silently 0.0 when unavailable rather than guessing.
+    `damping` (default 0.5, i.e. only half-credited) keeps this
+    conservative since, unlike the target/touch-based signals this model
+    has run with from the start, it's new and not yet validated against
+    real outcomes — see the post-slate resolution work for how that
+    validation is meant to happen over time.
+    """
+    recent_snap = ctx.recent_usage.get("snap_pct")
+    season_snap = ctx.season_usage.get("snap_pct")
+    if recent_snap is None or season_snap is None or season_snap <= 0.01:
+        return 0.0
+    ratio = max(0.5, min(1.5, recent_snap / season_snap))  # cap the swing at +/-50%
+    return base_points * (ratio - 1.0) * damping
 
 
 def wind_penalty(wind_mph: float, threshold: float = 12.0, per_mph: float = 0.02) -> float:

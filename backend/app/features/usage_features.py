@@ -99,4 +99,18 @@ def compute_usage_snapshot(games: list[dict], position_priors: dict | None = Non
         prior_rate = priors.get(rate_name, 0.5)
         out[rate_name] = round(_shrink_rate(num_sum, den_sum, prior_rate, prior_games_weight), 4)
 
+    # snap_pct is already a per-game ratio (nflverse's snap_counts release
+    # — see build_game_logs_by_player's snap_df param), not a num/den pair
+    # like the RATE_FIELD_SOURCES above, so it's weighted-averaged
+    # directly. Not every game log has it (only merged in when the two
+    # nflverse files cross-referenced successfully — see
+    # build_snap_pct_lookup), so this only averages over games that
+    # actually have a value, re-weighted among just those, rather than
+    # defaulting a missing game to 0 and wrongly implying "played no
+    # snaps" for what's really just a data gap.
+    snap_games = [(g, w) for g, w in zip(games, weights) if "snap_pct" in g]
+    if snap_games:
+        snap_weights = [w for _, w in snap_games]
+        out["snap_pct"] = round(_weighted_avg([g for g, _ in snap_games], "snap_pct", snap_weights), 4)
+
     return out

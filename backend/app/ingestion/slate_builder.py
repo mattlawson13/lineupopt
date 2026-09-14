@@ -482,8 +482,20 @@ def _load_historical_stats(season: int, week: int) -> tuple[dict, dict, str | No
     if df is None:
         return {}, {}, f"{last_exc} — projections will fall back to positional priors"
 
-    game_logs = build_game_logs_by_player(df, lookup_season, through_week=week if lookup_season == season else None)
-    fpts_allowed = build_fpts_allowed_by_team_position(df, lookup_season, through_week=week if lookup_season == season else None)
+    # Snap share is a genuinely separate, additive signal from targets/
+    # touches (see usage_features.py and the position models' snap-trend
+    # adjustment) — it's optional here (None on failure) rather than
+    # blocking the build, since the whole projection pipeline already
+    # works without it and this is a newer, less battle-tested input.
+    snap_df = None
+    try:
+        snap_df = source.get_snap_counts(lookup_season).data
+    except SourceUnavailableError:
+        pass
+
+    through = week if lookup_season == season else None
+    game_logs = build_game_logs_by_player(df, lookup_season, through_week=through, snap_df=snap_df)
+    fpts_allowed = build_fpts_allowed_by_team_position(df, lookup_season, through_week=through)
     warning = None if lookup_season == season else f"No {season} data yet — using {lookup_season} historical rates"
     return game_logs, fpts_allowed, warning
 

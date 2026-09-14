@@ -5,6 +5,7 @@ from app.projections.nfl.common import (
     PlayerProjectionContext,
     injury_delta,
     matchup_delta,
+    snap_trend_delta,
     usage_trend_delta,
     vegas_delta,
     wind_penalty,
@@ -48,12 +49,13 @@ def project(ctx: PlayerProjectionContext) -> ComponentProjection:
     vegas_adj = vegas_delta(ctx, VEGAS_SENSITIVITY) + (-ctx.spread) * SPREAD_SENSITIVITY
     usage_adj = usage_trend_delta(ctx, pts_fn)
     matchup_adj = matchup_delta(ctx, MATCHUP_SENSITIVITY)
+    snap_trend_adj = snap_trend_delta(ctx, base_points)
 
-    pre_weather_total = base_points + vegas_adj + usage_adj + matchup_adj
+    pre_weather_total = base_points + vegas_adj + usage_adj + matchup_adj + snap_trend_adj
     wind_factor = wind_penalty(ctx.wind_mph if not ctx.is_dome else 0.0, threshold=18.0, per_mph=0.01)  # RBs barely affected
     weather_adj = pre_weather_total * (wind_factor - 1.0)
 
-    injury_adj = injury_delta(ctx, base_points + vegas_adj + usage_adj + matchup_adj + weather_adj)
+    injury_adj = injury_delta(ctx, base_points + vegas_adj + usage_adj + matchup_adj + snap_trend_adj + weather_adj)
 
     final_usage = ctx.recent_usage or ctx.season_usage
     return ComponentProjection(
@@ -66,4 +68,5 @@ def project(ctx: PlayerProjectionContext) -> ComponentProjection:
         matchup_adjustment=matchup_adj,
         weather_adjustment=weather_adj,
         injury_adjustment=injury_adj,
+        snap_trend_adjustment=snap_trend_adj,
     )

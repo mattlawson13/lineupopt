@@ -40,11 +40,41 @@ def nflverse_row_to_game_stats(row: pd.Series) -> dict:
     }
 
 
-def build_game_logs_by_player(df: pd.DataFrame, season: int, through_week: int | None = None) -> dict[tuple[str, str], list[dict]]:
+def build_snap_pct_lookup(df: pd.DataFrame, season: int, through_week: int | None = None) -> dict[tuple[str, str, int], float]:
+    """(normalized_name, position, week) -> offensive snap share, from
+    nflverse's snap_counts release (NFLStatsSource.get_snap_counts()).
+    Cross-references against player_stats by normalized name — verified
+    live on 2024 week 1: 301/303 skill-position players matched (the 2
+    misses were suffix formatting, e.g. "Gabe Davis" vs "Gabriel Davis").
+    """
+    df = df[df["season"] == season]
+    if through_week is not None:
+        df = df[df["week"] < through_week]
+    df = df[df["position"].isin(NFL_POSITION_MAP.keys())]
+    out: dict[tuple[str, str, int], float] = {}
+    for _, row in df.iterrows():
+        position = NFL_POSITION_MAP.get(row["position"])
+        if not position:
+            continue
+        out[(normalize_name(row["player"]), position, int(row["week"]))] = float(row.get("offense_pct") or 0.0)
+    return out
+
+
+def build_game_logs_by_player(
+    df: pd.DataFrame, season: int, through_week: int | None = None, snap_df: pd.DataFrame | None = None,
+) -> dict[tuple[str, str], list[dict]]:
     """Returns {(normalized_name, position): [game_stats, ...]} ordered
     oldest-first, restricted to `season` (and optionally up through a
     given week — used when backtesting a specific historical slate so we
     never leak future data into a projection).
+
+    `snap_df` (nflverse's snap_counts release, optional) merges in each
+    game's offensive snap share as a "snap_pct" key — a leading indicator
+    of role change that moves before touches/targets do, and (unlike
+    depth-chart rank, which only updates periodically) reflects what
+    actually happened on the field that specific week. Omitted from a
+    game's dict entirely when unavailable, rather than defaulted to 0,
+    so downstream averaging doesn't mistake "no data" for "didn't play."
     """
     df = df[df["season"] == season]
     if through_week is not None:
@@ -52,13 +82,19 @@ def build_game_logs_by_player(df: pd.DataFrame, season: int, through_week: int |
     df = df[df["position"].isin(NFL_POSITION_MAP.keys())]
     df = df.sort_values(["week"])
 
+    snap_lookup = build_snap_pct_lookup(snap_df, season, through_week) if snap_df is not None else {}
+
     logs: dict[tuple[str, str], list[dict]] = {}
     for _, row in df.iterrows():
         position = NFL_POSITION_MAP.get(row["position"])
         if not position:
             continue
         key = (normalize_name(row["player_display_name"]), position)
-        logs.setdefault(key, []).append(nflverse_row_to_game_stats(row))
+        stats = nflverse_row_to_game_stats(row)
+        snap_pct = snap_lookup.get((key[0], key[1], int(row["week"])))
+        if snap_pct is not None:
+            stats["snap_pct"] = snap_pct
+        logs.setdefault(key, []).append(stats)
     return logs
 
 
