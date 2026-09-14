@@ -258,7 +258,7 @@ def _persist_slate_entities(db: Session, dk_slate: DraftKingsSlate, run_id: str)
         slate = Slate(
             sport="nfl", contest_type=dk_slate.contest_type, dk_draft_group_id=dk_slate.dk_draft_group_id,
             name=f"NFL Slate {dk_slate.dk_draft_group_id}", season=earliest.year,
-            week=_estimate_nfl_week(earliest), start_time_utc=earliest, game_ids=[],
+            week=_resolve_nfl_week(earliest.year, earliest), start_time_utc=earliest, game_ids=[],
             source="csv_import" if not dk_slate.players[0].dk_draftable_id else "dk_api",
             imported_at=now,
         )
@@ -336,6 +336,18 @@ def _estimate_nfl_week(dt: datetime.datetime) -> int:
     season_start = datetime.datetime(dt.year if dt.month >= 8 else dt.year - 1, 9, 4, tzinfo=datetime.timezone.utc)
     delta_days = (dt - season_start).days
     return max(1, min(18, delta_days // 7 + 1))
+
+
+def _resolve_nfl_week(season: int, dt: datetime.datetime) -> int:
+    """Real week number for `dt`, from ESPN's own week date ranges
+    (espn_adapter.resolve_week) — falls back to the September-4th
+    calendar estimate only if ESPN can't be reached. The estimate is
+    wrong every year the real season opener lands on a different date
+    (confirmed live for 2026: it put a real week-1 Monday game one week
+    into "week 2", and the next week's Sunday slate into "week 3").
+    """
+    resolved = espn_adapter.resolve_week(season, dt)
+    return resolved if resolved is not None else _estimate_nfl_week(dt)
 
 
 def _fetch_and_apply_betting_lines(db: Session, game_by_teams: dict) -> tuple[dict, str | None]:

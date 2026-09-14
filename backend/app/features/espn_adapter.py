@@ -22,6 +22,7 @@ break a slate build.
 from __future__ import annotations
 
 import concurrent.futures
+import datetime
 import json
 import re
 import time
@@ -94,6 +95,56 @@ def _get(client: httpx.Client, url: str, params: dict | None = None) -> dict:
     resp = client.get(url, params=params, timeout=_TIMEOUT)
     resp.raise_for_status()
     return resp.json()
+
+
+_WEEK_BOUNDARIES_CACHE_TTL_SECONDS = 24 * 3600
+
+
+def resolve_week(season: int, dt: datetime.datetime, season_type: int = 2) -> int | None:
+    """The real NFL week number that contains `dt`, from ESPN's own
+    week-by-week startDate/endDate ranges — not a guess.
+
+    Why this exists: ingestion/slate_builder.py used to *estimate* a
+    slate's week from a hardcoded "season starts September 4th" assumption
+    (_estimate_nfl_week) — wrong every year the real opener lands on a
+    different date (NFL's Thursday opener moves with Labor Day), and
+    confirmed live off-by-one for 2026: a Sept 14/15 Monday game (real
+    week 1's MNF finale, ESPN's own week 1 runs Sept 6-16) was labeled
+    "week 2", and the following Sunday's games (real week 2) were labeled
+    "week 3". That's not just a cosmetic label — _load_historical_stats()
+    uses the slate's week to decide which weeks count as "completed,
+    safe-to-use history", so an inflated week number could eventually
+    reach a real future week nflverse-style once nflverse catches back up.
+
+    Returns None (caller falls back to the old estimate) if ESPN can't be
+    reached — best-effort, like every other ESPN-sourced signal in this
+    module.
+    """
+    cache_file = _CACHE_DIR / f"{season}_{season_type}_week_boundaries.json"
+    if cache_file.exists() and (time.time() - cache_file.stat().st_mtime) < _WEEK_BOUNDARIES_CACHE_TTL_SECONDS:
+        boundaries = json.loads(cache_file.read_text())
+    else:
+        try:
+            with httpx.Client(follow_redirects=True) as client:
+                doc = _get(client, f"{BASE}/seasons/{season}/types/{season_type}/weeks", params={"limit": 25})
+                refs = [item["$ref"] for item in doc.get("items", [])]
+                with concurrent.futures.ThreadPoolExecutor(max_workers=min(18, len(refs)) or 1) as pool:
+                    weeks = list(pool.map(lambda ref: _get(client, ref), refs))
+        except httpx.HTTPError:
+            return None
+        boundaries = [
+            {"number": w["number"], "startDate": w["startDate"], "endDate": w["endDate"]}
+            for w in weeks if "number" in w and "startDate" in w and "endDate" in w
+        ]
+        cache_file.write_text(json.dumps(boundaries))
+
+    target = dt if dt.tzinfo is not None else dt.replace(tzinfo=datetime.timezone.utc)
+    for w in boundaries:
+        start = datetime.datetime.fromisoformat(w["startDate"].replace("Z", "+00:00"))
+        end = datetime.datetime.fromisoformat(w["endDate"].replace("Z", "+00:00"))
+        if start <= target <= end:
+            return w["number"]
+    return None
 
 
 def _resolve_athlete_name(client: httpx.Client, athlete_ref: str) -> str:
