@@ -19,6 +19,15 @@ export interface AvailableDkSlate {
   sample_contest_name: string;
 }
 
+export interface DkContest {
+  dk_contest_id: string;
+  name: string;
+  entry_fee: number;
+  total_prizes: number;
+  max_entries: number;
+  is_guaranteed: boolean;
+}
+
 export interface Slate {
   id: string;
   sport: string;
@@ -126,6 +135,8 @@ async function getJSON<T>(path: string): Promise<T> {
 export const api = {
   listSlates: () => getJSON<Slate[]>("/api/slates"),
   listAvailableDkSlates: () => getJSON<AvailableDkSlate[]>("/api/slates/available"),
+  listContestsForDraftGroup: (dkDraftGroupId: string) =>
+    getJSON<DkContest[]>(`/api/slates/available/${dkDraftGroupId}/contests`),
   getSlate: (id: string) => getJSON<Slate & { games: Game[] }>(`/api/slates/${id}`),
   getSlatePlayers: (id: string) => getJSON<PlayerRow[]>(`/api/slates/${id}/players`),
   getSlateGames: (id: string) => getJSON<Game[]>(`/api/slates/${id}/games`),
@@ -134,7 +145,13 @@ export const api = {
     getJSON<any>(`/api/players/${playerId}?slate_id=${slateId}`),
 
   streamBuildSlate: (
-    body: { dk_draft_group_id: string; num_simulations: number; num_lineups: number; objective: string },
+    body: {
+      dk_draft_group_id: string;
+      num_simulations: number;
+      num_lineups: number;
+      objective: string;
+      dk_contest_id?: string;
+    },
     onEvent: (evt: BuildProgressEvent) => void,
     onDone: () => void,
     onError: (msg: string) => void

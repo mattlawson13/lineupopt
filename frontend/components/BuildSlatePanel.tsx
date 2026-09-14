@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, AvailableDkSlate, BuildProgressEvent } from "@/lib/api";
+import { api, AvailableDkSlate, BuildProgressEvent, DkContest } from "@/lib/api";
 
 function formatSlateLabel(s: AvailableDkSlate): string {
   const start = new Date(s.start_time_utc);
@@ -13,6 +13,13 @@ function formatSlateLabel(s: AvailableDkSlate): string {
   });
   const formatTag = s.contest_format === "showdown" ? "[Showdown] " : "";
   return `${formatTag}${when} — ${s.sample_contest_name} (${s.contest_count} contests)`;
+}
+
+function formatContestLabel(c: DkContest): string {
+  const pct1st = c.name.match(/\[([^\]]*to 1st[^\]]*)\]/i)?.[1]; // e.g. "$50K to 1st"
+  const size = c.max_entries === 1 ? "H2H" : `${c.max_entries.toLocaleString()} entries`;
+  const fee = c.entry_fee > 0 ? `$${c.entry_fee.toLocaleString()}` : "Free";
+  return `${c.name.replace(/\s*\([^)]*\)\s*$/, "")} — ${fee}, ${size}${pct1st ? `, ${pct1st}` : ""}`;
 }
 
 const STEP_LABELS: Record<string, string> = {
@@ -55,6 +62,9 @@ export default function BuildSlatePanel({
   const [availableSlates, setAvailableSlates] = useState<AvailableDkSlate[]>([]);
   const [slatesLoading, setSlatesLoading] = useState(true);
   const [slatesError, setSlatesError] = useState<string | null>(null);
+  const [contests, setContests] = useState<DkContest[]>([]);
+  const [contestsLoading, setContestsLoading] = useState(false);
+  const [contestId, setContestId] = useState("");
   // Conservative defaults for a free-tier (512MB) backend host — a full
   // main slate has ~750 relevant players, and 10k sims x 20 lineups got
   // an actual deployed instance OOM-killed. Still editable — raise these
@@ -80,12 +90,30 @@ export default function BuildSlatePanel({
 
   useEffect(loadAvailableSlates, []);
 
+  // Contests are fetched per draft group (not part of /available's own
+  // response — that endpoint deliberately collapses a whole group into one
+  // representative row) so the objective can be calibrated to the actual
+  // contest being entered instead of a generic GPP-size bucket.
+  useEffect(() => {
+    if (!draftGroupId) return;
+    setContestsLoading(true);
+    setContestId("");
+    api
+      .listContestsForDraftGroup(draftGroupId)
+      .then(setContests)
+      .catch(() => setContests([]))
+      .finally(() => setContestsLoading(false));
+  }, [draftGroupId]);
+
   const handleBuild = () => {
     if (!draftGroupId) return;
     setEvents([]);
     setBuilding(true);
     api.streamBuildSlate(
-      { dk_draft_group_id: draftGroupId, num_simulations: numSims, num_lineups: numLineups, objective },
+      {
+        dk_draft_group_id: draftGroupId, num_simulations: numSims, num_lineups: numLineups, objective,
+        dk_contest_id: contestId || undefined,
+      },
       (evt) => {
         setEvents((prev) => {
           const idx = prev.findIndex((e) => e.step === evt.step);
@@ -178,6 +206,26 @@ export default function BuildSlatePanel({
             <option value="large_field_gpp">Large-Field GPP</option>
           </select>
         </label>
+        {objective !== "cash" && (
+          <label className="col-span-2 flex flex-col gap-1 text-xs text-slate-400 sm:col-span-4">
+            Contest <span className="text-slate-600">(optional — calibrates the objective to this contest&apos;s real field size)</span>
+            <select
+              className="rounded border border-surface-border bg-surface px-2 py-1.5 text-sm text-slate-100 focus:border-accent focus:outline-none disabled:opacity-50"
+              value={contestId}
+              onChange={(e) => setContestId(e.target.value)}
+              disabled={contestsLoading || contests.length === 0}
+            >
+              <option value="">
+                {contestsLoading ? "Loading contests…" : "None — generic GPP objective"}
+              </option>
+              {contests.map((c) => (
+                <option key={c.dk_contest_id} value={c.dk_contest_id}>
+                  {formatContestLabel(c)}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
       </div>
 
       <button
