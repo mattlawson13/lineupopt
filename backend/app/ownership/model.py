@@ -73,12 +73,39 @@ def _zscore(values: list[float], value: float) -> float:
     return max(-_ZSCORE_CLIP, min(_ZSCORE_CLIP, z))
 
 
+_UNPLAYABLE_PROJECTION_FLOOR = 1.0
+
+
 def project_ownership(
     players: list[PlayerOwnershipInput], contest_type: str = "classic"
 ) -> list[OwnershipResult]:
     cfg = get_ownership_settings()
     feat_coefs = cfg["features"]
     intercepts = cfg["intercept_by_position"]
+
+    # Players with a near-zero real ensemble projection (inactive,
+    # 3rd/4th-string emergency depth, etc.) are hard-clamped to the
+    # ownership floor rather than competing in the softmax below. The
+    # z-score features that drive the softmax are clipped at +/-2.5 sigma
+    # (see _zscore) as general defensive practice — but that clip can't
+    # distinguish "genuinely cannot play" from "just below average," so a
+    # truly dead player can still retain a non-trivial softmax share,
+    # especially in a thin position group. Confirmed live: a real Showdown
+    # slate's backup QBs (0.02-0.32 projected points) still came out at
+    # 13-20% projected ownership after fixing the position-target bug
+    # below, purely from surviving in the softmax competition at all. The
+    # same 1.0-point threshold gates optimizer eligibility — see
+    # ingestion/slate_builder.py's _optimize_lineups — since a player who
+    # shouldn't be draftable shouldn't have real projected ownership either.
+    viable = [p for p in players if p.ensemble_projection >= _UNPLAYABLE_PROJECTION_FLOOR]
+    unplayable = [p for p in players if p.ensemble_projection < _UNPLAYABLE_PROJECTION_FLOOR]
+    floor_results = [
+        OwnershipResult(player_id=p.player_id, projected_ownership_pct=cfg["min_ownership_pct"], feature_breakdown={})
+        for p in unplayable
+    ]
+    if not viable:
+        return floor_results
+    players = viable
 
     values_pct = [p.ensemble_projection / max(p.salary, _MIN_SALARY_FOR_VALUE) * 1000 for p in players]
     totals = [p.implied_team_total for p in players]
@@ -119,10 +146,46 @@ def project_ownership(
         raw_scores[p.player_id] = score
         breakdowns[p.player_id] = features
 
-    # Softmax-normalize within each position group so total "rostership
-    # share" for a position matches how many roster slots that position
-    # fills per lineup (spec: "normalize to roster slots").
+    # Softmax-normalize so total "rostership share" matches how many
+    # roster slots exist to fill (spec: "normalize to roster slots").
+    #
+    # DK Showdown's CPT+FLEX slots are ALL eligible for every position
+    # (see dk_roster_rules_nfl.yaml) — every slot draws from the exact
+    # same shared pool. When every slot's eligible set is identical, doing
+    # a PER-POSITION-independent softmax (as below) wrongly gives each
+    # position its own fully independent 100% target, as if positions
+    # don't compete for the same slots. Confirmed live on a real Showdown
+    # build: with only 6 QBs on the slate and QB independently "entitled"
+    # to a full 100% ownership share, backup QBs projected for 0.02-0.32
+    # fantasy points came out at 8-16% projected ownership — higher than
+    # some legitimately-played skill players — because there were too few
+    # real QBs to absorb that inflated target. Positions genuinely DO
+    # compete for the same slots in this format, so a single slate-wide
+    # softmax (target = total roster slots x 100%) is used instead — a
+    # bad player now competes directly against every other player on the
+    # slate for ownership share, not just against other bad players at
+    # the same position.
     roster_rules = get_dk_roster_rules("nfl", contest_type)
+    eligible_sets = {frozenset(info["eligible"]) for info in roster_rules["positions"].values()}
+    shares_all_slots = len(eligible_sets) == 1 and len(next(iter(eligible_sets))) > 1
+
+    if shares_all_slots:
+        total_slots = sum(info["count"] for info in roster_rules["positions"].values())
+        target_total_pct = total_slots * 100.0
+        exp_scores = {p.player_id: math.exp(raw_scores[p.player_id]) for p in players}
+        denom = sum(exp_scores.values()) or 1.0
+        for p in players:
+            raw_pct = exp_scores[p.player_id] / denom * target_total_pct
+            clamped = min(max(raw_pct, cfg["min_ownership_pct"]), cfg["max_ownership_pct"])
+            results.append(
+                OwnershipResult(
+                    player_id=p.player_id,
+                    projected_ownership_pct=round(clamped, 2),
+                    feature_breakdown=breakdowns[p.player_id],
+                )
+            )
+        return results + floor_results
+
     slots_by_eligible_position: dict[str, float] = {}
     for slot, info in roster_rules["positions"].items():
         share = 1.0 / len(info["eligible"])
@@ -144,7 +207,7 @@ def project_ownership(
                 )
             )
 
-    return results
+    return results + floor_results
 
 
 def compute_leverage(projected_ownership_pct: float, optimal_ownership_pct: float) -> float:

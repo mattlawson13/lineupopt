@@ -1143,6 +1143,24 @@ def _optimize_lineups(db, slate, dk_player_rows, ensemble_by_player_id, ownershi
         info = ensemble_by_player_id.get(r.player_id)
         if not info or not r.game_id:
             continue
+        # Hard eligibility floor, not just an objective-value discount.
+        # Every existing discount (depth chart multiplier, injury
+        # availability, market projection scaling) already pushes a truly
+        # unplayable player's ensemble_projection toward zero — but a
+        # heavily-discounted player is still nominally ELIGIBLE for the
+        # ILP, and portfolio exposure caps (diversification.py) can
+        # exhaust every viable player in a thin pool (e.g. Showdown's
+        # ~22-player slate) well before num_lineups is reached. Once that
+        # happens the solver has to pick SOMETHING legal from what's left,
+        # and a never-yet-used near-zero player is exactly what's left,
+        # since it was never capped precisely because it was never good
+        # enough to pick in the first place. Confirmed live: a real
+        # Showdown portfolio rostered four separate backup QBs (0.02-0.32
+        # projected points) as FLEX once the two real QBs hit their
+        # exposure caps. A discount can never fully prevent this — only
+        # removing the player from the eligible pool entirely can.
+        if info["ensemble"].ensemble_projection < 1.0:
+            continue
         ens = info["ensemble"]
         sim = sim_result.player_summaries.get(r.player_id)
         own = ownership_by_player_id.get(r.player_id)

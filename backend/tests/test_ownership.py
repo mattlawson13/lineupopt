@@ -59,6 +59,38 @@ def test_most_owned_player_has_highest_chalk_score():
     assert highest_chalk_ids & most_owned_ids
 
 
+def test_showdown_thin_position_group_does_not_inflate_ownership():
+    # Reproduces a real live bug: a 2-team Showdown slate with only 6 total
+    # QBs (2 real starters, 4 near-dead backups projected under 1 point).
+    # The old per-position-independent softmax gave QB its own guaranteed
+    # 100% ownership target regardless of format — with only 6 QBs to
+    # split that inflated target, the backups came out at 8-16% projected
+    # ownership despite being nearly unplayable. In Showdown, CPT and FLEX
+    # share one eligible-position set, so ownership must be computed as a
+    # single slate-wide competition instead.
+    players = [
+        PlayerOwnershipInput("qb_starter1", "QB", 9600, 18.4, 24.0, -2.0, 17.0),
+        PlayerOwnershipInput("qb_starter2", "QB", 9800, 19.3, 24.0, 2.0, 18.0),
+        PlayerOwnershipInput("qb_backup1", "QB", 8600, 0.02, 24.0, -2.0, 0.0),
+        PlayerOwnershipInput("qb_backup2", "QB", 6000, 0.31, 24.0, 2.0, 0.0),
+        PlayerOwnershipInput("qb_backup3", "QB", 6000, 0.32, 24.0, 2.0, 0.0),
+        PlayerOwnershipInput("qb_backup4", "QB", 6000, 0.32, 24.0, -2.0, 0.0),
+    ]
+    for i in range(10):
+        players.append(PlayerOwnershipInput(f"skill{i}", "WR", 5000 + i * 200, 12.0 - i * 0.5, 24.0, 0.0, 10.0))
+
+    results = project_ownership(players, contest_type="showdown")
+    by_id = {r.player_id: r for r in results}
+    for backup_id in ["qb_backup1", "qb_backup2", "qb_backup3", "qb_backup4"]:
+        assert by_id[backup_id].projected_ownership_pct < 3.0, (
+            f"{backup_id} projected at {by_id[backup_id].projected_ownership_pct}% — "
+            "a sub-1-point player should be nowhere near real ownership"
+        )
+    # The two real starters should still soak up the bulk of QB ownership.
+    assert by_id["qb_starter1"].projected_ownership_pct > 10.0
+    assert by_id["qb_starter2"].projected_ownership_pct > 10.0
+
+
 def test_injury_penalizes_ownership():
     # Remove the fixture's own wr1 so these two are the clear top WR play
     # (isolating the injury-status effect) without both saturating the
