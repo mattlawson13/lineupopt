@@ -1,6 +1,7 @@
 "use client";
 
-import { Lineup } from "@/lib/api";
+import { useEffect, useState } from "react";
+import { api, Lineup } from "@/lib/api";
 
 // CPT first (Showdown's premium slot leads on DK's own UI); FLEX last so
 // Classic's own FLEX doesn't collide with Showdown's 5 FLEX slots — both
@@ -9,7 +10,36 @@ import { Lineup } from "@/lib/api";
 const SLOT_ORDER = ["CPT", "QB", "RB", "WR", "TE", "DST", "FLEX"];
 
 export default function LineupsPanel({ lineups }: { lineups: Lineup[] }) {
-  if (!lineups.length) {
+  // Late swap replaces one lineup with a freshly re-optimized one (a new
+  // OptimizationRun under the hood) — re-fetching the slate's lineups from
+  // the backend would collapse the view down to just that new run's single
+  // lineup, losing the rest of the portfolio. Keeping a local, editable
+  // copy lets a swap update just that one card in place instead.
+  const [localLineups, setLocalLineups] = useState(lineups);
+  const [swapping, setSwapping] = useState<Set<string>>(new Set());
+  const [swapError, setSwapError] = useState<Record<string, string>>({});
+
+  useEffect(() => setLocalLineups(lineups), [lineups]);
+
+  const handleLateSwap = async (lineupId: string) => {
+    setSwapping((prev) => new Set(prev).add(lineupId));
+    setSwapError((prev) => ({ ...prev, [lineupId]: "" }));
+    try {
+      const result = await api.lateSwapLineup(lineupId);
+      const swapped = result.lineups[0];
+      setLocalLineups((prev) => prev.map((lu) => (lu.id === lineupId ? swapped : lu)));
+    } catch (e: any) {
+      setSwapError((prev) => ({ ...prev, [lineupId]: e?.message || String(e) }));
+    } finally {
+      setSwapping((prev) => {
+        const next = new Set(prev);
+        next.delete(lineupId);
+        return next;
+      });
+    }
+  };
+
+  if (!localLineups.length) {
     return (
       <div className="rounded-lg border border-surface-border bg-surface-raised p-8 text-center text-sm text-slate-500">
         No lineups yet — build a slate to generate them.
@@ -19,7 +49,7 @@ export default function LineupsPanel({ lineups }: { lineups: Lineup[] }) {
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-      {lineups.map((lu) => (
+      {localLineups.map((lu) => (
         <div key={lu.id} className="rounded-lg border border-surface-border bg-surface-raised p-4">
           <div className="mb-2 flex items-center justify-between">
             <span className="text-sm font-semibold text-accent">
@@ -52,10 +82,22 @@ export default function LineupsPanel({ lineups }: { lineups: Lineup[] }) {
             <Stat label="Uniq" value={lu.uniqueness_score?.toFixed(1) ?? "—"} />
           </div>
 
-          <div className="rounded border border-surface-border bg-surface p-2.5 text-xs leading-relaxed text-slate-300">
+          <div className="mb-3 rounded border border-surface-border bg-surface p-2.5 text-xs leading-relaxed text-slate-300">
             <span className="font-semibold text-slate-400">WHY THIS LINEUP? </span>
             {lu.explanation}
           </div>
+
+          <button
+            onClick={() => handleLateSwap(lu.id)}
+            disabled={swapping.has(lu.id)}
+            title="Lock in players whose game has already started; re-optimize everyone else against current projections"
+            className="w-full rounded border border-surface-border bg-surface px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {swapping.has(lu.id) ? "Swapping…" : "Late Swap"}
+          </button>
+          {swapError[lu.id] && (
+            <div className="mt-1.5 text-[11px] text-danger">{swapError[lu.id]}</div>
+          )}
         </div>
       ))}
     </div>

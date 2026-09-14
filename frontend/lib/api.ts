@@ -176,4 +176,11 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     }).then((r) => r.json()),
+
+  lateSwapLineup: async (lineupId: string) => {
+    const res = await fetch(`${API_BASE}/api/lineups/${lineupId}/late-swap`, { method: "POST" });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body?.detail || `HTTP ${res.status}`);
+    return body as { lineups: Lineup[]; kept_from_original: number; swapped_slots: number };
+  },
 };
