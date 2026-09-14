@@ -17,6 +17,22 @@ from app.config.loader import get_dk_roster_rules, get_ownership_settings
 
 INJURY_SEVERITY = {"healthy": 0.0, "questionable": 1.0, "doubtful": 2.0, "out": 3.0, "ir": 3.0}
 
+# Floor used when computing points-per-$1000-salary for the value_zscore
+# feature (NOT for the "value" column shown in the player pool — that's a
+# separate, standard DFS display metric and is left alone). Confirmed
+# live: without a floor, a $200 Showdown FLEX practice-squad player
+# (depth-chart-discounted to a 2-3 point projection) produces a
+# points-per-dollar ratio 5-10x every real player's, because the ratio
+# only cares how small the denominator is, not whether the player will
+# ever actually be rostered. That single feature — the model's largest
+# coefficient (0.30) — was enough to project a completely unranked bench
+# player above several legitimate rostered backups (16%+ ownership).
+# Evaluating value as if every player cost at least $3000 (the salary
+# range where real bench-vs-starter distinctions actually live) keeps the
+# feature meaningful for genuine value plays without this floor-price
+# artifact.
+_MIN_SALARY_FOR_VALUE = 3000
+
 
 @dataclasses.dataclass
 class PlayerOwnershipInput:
@@ -39,12 +55,22 @@ class OwnershipResult:
     feature_breakdown: dict
 
 
+_ZSCORE_CLIP = 2.5  # see _zscore() docstring
+
+
 def _zscore(values: list[float], value: float) -> float:
+    """Clipped to +/-2.5 std devs as general defensive practice against
+    any single feature dominating this linear model's raw score — the
+    main fix for the specific value_zscore-at-the-salary-floor issue this
+    was written alongside is `_MIN_SALARY_FOR_VALUE` above, not this clip
+    (2.5 sigma alone didn't catch that case; see that constant's comment).
+    """
     if len(values) < 2:
         return 0.0
     mean = statistics.mean(values)
     stdev = statistics.pstdev(values) or 1.0
-    return (value - mean) / stdev
+    z = (value - mean) / stdev
+    return max(-_ZSCORE_CLIP, min(_ZSCORE_CLIP, z))
 
 
 def project_ownership(
@@ -54,7 +80,7 @@ def project_ownership(
     feat_coefs = cfg["features"]
     intercepts = cfg["intercept_by_position"]
 
-    values_pct = [p.ensemble_projection / max(p.salary, 1) * 1000 for p in players]
+    values_pct = [p.ensemble_projection / max(p.salary, _MIN_SALARY_FOR_VALUE) * 1000 for p in players]
     totals = [p.implied_team_total for p in players]
     spreads = [p.spread for p in players]
     recents = [p.recent_avg_points for p in players if p.recent_avg_points is not None]
@@ -77,7 +103,7 @@ def project_ownership(
     breakdowns: dict[str, dict] = {}
 
     for p in players:
-        value_pct = p.ensemble_projection / max(p.salary, 1) * 1000
+        value_pct = p.ensemble_projection / max(p.salary, _MIN_SALARY_FOR_VALUE) * 1000
         features = {
             "value_zscore": _zscore(values_pct, value_pct),
             "projection_rank_pct": rank_pct.get(p.player_id, 0.5),
