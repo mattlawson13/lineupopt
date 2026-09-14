@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import csv
 import io
+from collections import Counter
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -171,6 +172,26 @@ def merge_lineups_into_dk_template(template_text: str, db: Session, slate: Slate
         raise TemplateFormatError(
             "Couldn't find a DraftKings roster header row (e.g. CPT,FLEX,... or QB,RB,WR,...) in the uploaded file — "
             "make sure this is the file DraftKings itself gave you to download, not something else."
+        )
+
+    # The uploaded template's roster shape must match the SELECTED slate's
+    # actual contest format — e.g. a Showdown template (CPT,FLEX x5) has
+    # no correct way to hold a Classic 9-player lineup (QB,RB,RB,WR,WR,WR,
+    # TE,FLEX,DST), or vice versa. Without this check, a mismatched
+    # template would silently fill only the couple of slot names that
+    # happen to overlap (e.g. just the single "FLEX" slot) and leave the
+    # rest of each row blank, producing a file that looks complete but
+    # is missing most of every lineup.
+    rules = get_contest_rules(slate.sport, slate.contest_type)
+    expected_slot_names = [s.name for s in rules.slots for _ in range(s.count)]
+    found_tokens = Counter(name for _, name in slot_columns)
+    if found_tokens != Counter(expected_slot_names):
+        expected_str = ",".join(expected_slot_names)
+        found_str = ",".join(name for _, name in slot_columns)
+        raise TemplateFormatError(
+            f"This file's roster columns ({found_str}) don't match the selected slate's format "
+            f"({expected_str}, {slate.contest_type}) — make sure you've selected the matching slate above "
+            "and uploaded the right file for it."
         )
 
     fillable_row_indices: list[int] = []
