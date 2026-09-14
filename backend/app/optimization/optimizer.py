@@ -23,6 +23,11 @@ class OptimizerPlayer:
     objective_value: float  # the score being maximized — caller decides what this represents (see portfolio/builder.py)
     locked: bool = False
     excluded: bool = False
+    # Distinct from `excluded`: still eligible for every other slot, just
+    # not the DK Showdown "CPT" slot specifically — see diversification.py's
+    # captain-exposure cap, which uses this instead of a full exclusion so
+    # a capped-out captain can still be rostered at FLEX.
+    captain_excluded: bool = False
 
 
 @dataclasses.dataclass
@@ -78,6 +83,8 @@ def optimize_single_lineup(
     x: dict[tuple[str, str], pulp.LpVariable] = {}
     for p in pool:
         for slot in rules.slots:
+            if slot.name == "CPT" and p.captain_excluded:
+                continue
             if p.position in slot.eligible_positions:
                 x[(p.player_id, slot.name)] = pulp.LpVariable(f"x_{p.player_id}_{slot.name}", cat="Binary")
 

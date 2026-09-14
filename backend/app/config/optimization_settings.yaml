@@ -39,6 +39,7 @@ default_diversification:
   min_unique_players: 2
   max_team_exposure_pct: 60.0
   max_qb_exposure_pct: 30.0
+  max_captain_exposure_pct: 25.0 # Showdown only — no single player should be CPT in more than this share of the portfolio
 
 stacking:
   enabled_types: [standard, double_stack, bring_back, game_stack, run_back, naked_qb]

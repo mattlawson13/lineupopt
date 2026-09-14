@@ -68,6 +68,17 @@ class DiversificationSettings:
     min_unique_players: int = 2
     max_team_exposure_pct: float = 60.0
     max_qb_exposure_pct: float = 30.0
+    # DK Showdown's CPT slot scores 1.5x — nothing previously stopped the
+    # ILP from picking the same "best overall value" player as captain in
+    # every lineup a portfolio generated (the ordinary player-exposure cap
+    # only tracks whether a player appears in a lineup AT ALL, not which
+    # slot). Confirmed live: an 18-lineup Showdown portfolio had the same
+    # player as CPT in every single lineup shown. A real GPP-winning
+    # captain is often a cheaper, lower-owned, high-ceiling player exactly
+    # because the whole field converges on the "obvious" captain choice —
+    # capping any one player's captain share forces genuine rotation
+    # across the portfolio instead.
+    max_captain_exposure_pct: float = 25.0
 
 
 @dataclasses.dataclass
@@ -119,10 +130,12 @@ def generate_portfolio(
     exposure_count: dict[str, int] = {p.player_id: 0 for p in players}
     team_count: dict[str, int] = {}
     qb_count: dict[str, int] = {}
+    captain_count: dict[str, int] = {}
 
     max_allowed = max(1, math.ceil(diversification.max_player_exposure_pct / 100 * num_lineups))
     max_team_allowed = max(1, math.ceil(diversification.max_team_exposure_pct / 100 * num_lineups * rules.max_players_per_team))
     max_qb_allowed = max(1, math.ceil(diversification.max_qb_exposure_pct / 100 * num_lineups))
+    max_captain_allowed = max(1, math.ceil(diversification.max_captain_exposure_pct / 100 * num_lineups))
 
     effective_max_overlap = min(diversification.max_lineup_overlap, rules.roster_size - diversification.min_unique_players)
 
@@ -133,6 +146,8 @@ def generate_portfolio(
                 p.excluded = True
             if p.position == "QB" and qb_count.get(p.player_id, 0) >= max_qb_allowed:
                 p.excluded = True
+            if captain_count.get(p.player_id, 0) >= max_captain_allowed:
+                p.captain_excluded = True
             if team_count.get(p.team, 0) >= max_team_allowed:
                 p.excluded = True
             if randomness_pct > 0:
@@ -158,6 +173,8 @@ def generate_portfolio(
             team_count[p.team] = team_count.get(p.team, 0) + 1
             if p.position == "QB":
                 qb_count[p.player_id] = qb_count.get(p.player_id, 0) + 1
+            if a.slot == "CPT":
+                captain_count[a.player_id] = captain_count.get(a.player_id, 0) + 1
 
     if len(lineups) < num_lineups and not warnings:
         warnings.append(f"Only generated {len(lineups)}/{num_lineups} lineups before exhausting feasible options")

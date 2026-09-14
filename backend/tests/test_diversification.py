@@ -53,3 +53,37 @@ def test_uniqueness_score_zero_overlap_scenario():
     result = generate_portfolio(players, rules, num_lineups=5, diversification=DiversificationSettings(min_unique_players=2), seed=4)
     scores = [compute_uniqueness_score(lu, result.lineups) for lu in result.lineups]
     assert all(s >= 0 for s in scores)
+
+
+def make_showdown_pool():
+    players = []
+    pid = 0
+    for team in ("KC", "DEN"):
+        for pos, count in [("QB", 1), ("RB", 3), ("WR", 4), ("TE", 2), ("DST", 1)]:
+            for i in range(count):
+                pid += 1
+                salary = 3000 + i * 1200
+                proj = salary / 1000 * 2.4 - i * 0.2
+                players.append(OptimizerPlayer(f"sd{pid}", pos, team, "g0", salary, round(proj, 2)))
+    return players
+
+
+def test_captain_exposure_cap_respected():
+    # Reproduces the real fix: nothing previously stopped the same player
+    # from being CPT (DK Showdown's 1.5x slot) in every lineup a portfolio
+    # generated — the ordinary player-exposure cap only tracks whether a
+    # player appears in a lineup at all, not which slot.
+    players = make_showdown_pool()
+    rules = get_contest_rules("nfl", "showdown")
+    diversification = DiversificationSettings(max_captain_exposure_pct=25.0)
+    result = generate_portfolio(players, rules, num_lineups=12, diversification=diversification, randomness_pct=8.0, seed=5)
+    assert len(result.lineups) > 1
+    captain_counts: dict[str, int] = {}
+    for lu in result.lineups:
+        for a in lu.assignments:
+            if a.slot == "CPT":
+                captain_counts[a.player_id] = captain_counts.get(a.player_id, 0) + 1
+    max_captain_share = max(captain_counts.values()) / len(result.lineups) * 100
+    # ceil(25% of 12) = 3 lineups -> 25.0% exactly; small slack for rounding
+    assert max_captain_share <= 35.0
+    assert len(captain_counts) > 1, "the same player was captain in every lineup"
