@@ -9,6 +9,11 @@ export default function ResolutionsPanel({ slateId }: { slateId: string }) {
   const [summary, setSummary] = useState<ResolutionSummary | null>(null);
   const [patterns, setPatterns] = useState<ResolutionPatterns | null>(null);
   const [patternsLoading, setPatternsLoading] = useState(true);
+  const [resolvingAll, setResolvingAll] = useState(false);
+  const [resolveAllResult, setResolveAllResult] = useState<Awaited<ReturnType<typeof api.resolveAllSlates>> | null>(
+    null
+  );
+  const [resolveAllError, setResolveAllError] = useState<string | null>(null);
 
   const loadPatterns = () => {
     setPatternsLoading(true);
@@ -36,8 +41,64 @@ export default function ResolutionsPanel({ slateId }: { slateId: string }) {
     }
   };
 
+  const handleResolveAll = async () => {
+    setResolvingAll(true);
+    setResolveAllError(null);
+    setResolveAllResult(null);
+    try {
+      const result = await api.resolveAllSlates();
+      setResolveAllResult(result);
+      loadPatterns();
+    } catch (e: any) {
+      setResolveAllError(e?.message || String(e));
+    } finally {
+      setResolvingAll(false);
+    }
+  };
+
   return (
     <div className="space-y-5">
+      <div className="rounded-lg border border-surface-border bg-surface-raised p-5">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold tracking-tight">Resolve All Ingested Slates</h2>
+          <button
+            onClick={handleResolveAll}
+            disabled={resolvingAll}
+            className="rounded border border-surface-border bg-surface px-4 py-2 text-sm font-medium text-slate-300 transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {resolvingAll ? "Resolving…" : "Resolve All"}
+          </button>
+        </div>
+        <p className="mb-3 text-xs text-slate-500">
+          Grades every slate this app has ever built against real final stats — not just the active one — skipping
+          any already resolved. Only slates with a real player pool (i.e. ones you&apos;ve built at least once) are
+          in scope.
+        </p>
+        {resolveAllError && (
+          <div className="rounded border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
+            {resolveAllError}
+          </div>
+        )}
+        {resolveAllResult && (
+          <div className="space-y-2">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <Stat label="Total Slates" value={String(resolveAllResult.total_slates)} />
+              <Stat label="Resolved" value={String(resolveAllResult.resolved)} />
+              <Stat label="Already Done" value={String(resolveAllResult.skipped_already_resolved)} />
+              <Stat label="Not Final Yet" value={String(resolveAllResult.unavailable)} />
+            </div>
+            <ul className="space-y-1 text-xs text-slate-400">
+              {resolveAllResult.results.map((r) => (
+                <li key={r.slate_id}>
+                  <span className="font-medium text-slate-300">{r.name}</span>: {r.status}
+                  {r.detail ? ` — ${r.detail}` : ""}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+
       <div className="rounded-lg border border-surface-border bg-surface-raised p-5">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-lg font-semibold tracking-tight">Resolve This Slate</h2>
@@ -50,8 +111,8 @@ export default function ResolutionsPanel({ slateId }: { slateId: string }) {
           </button>
         </div>
         <p className="mb-3 text-xs text-slate-500">
-          Grades this slate against real final stats once the games are over, and computes the
-          &quot;retro-optimal&quot; lineup — the best roster obtainable with perfect hindsight — for comparison.
+          Grades this slate against real final stats once the games are over, and computes 5 different
+          &quot;retro-optimal&quot; lineups — the best rosters obtainable with perfect hindsight — for comparison.
           Only works once the slate&apos;s games have actually finished.
         </p>
         {resolveError && (

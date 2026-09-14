@@ -233,4 +233,18 @@ export const api = {
     return body as ResolutionSummary;
   },
   getResolutionPatterns: () => getJSON<ResolutionPatterns>("/api/resolutions/patterns"),
+
+  resolveAllSlates: async () => {
+    const res = await fetch(`${API_BASE}/api/resolutions/resolve_all`, { method: "POST" });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body?.detail || `HTTP ${res.status}`);
+    return body as {
+      total_slates: number;
+      resolved: number;
+      skipped_already_resolved: number;
+      unavailable: number;
+      errors: number;
+      results: { slate_id: string; name: string; status: string; detail?: string }[];
+    };
+  },
 };
