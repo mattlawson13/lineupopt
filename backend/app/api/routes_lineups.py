@@ -6,6 +6,8 @@ tweaks" request.
 """
 from __future__ import annotations
 
+import datetime
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -205,4 +207,79 @@ def generate_lineups(req: ManualOptimizeRequest, db: Session = Depends(get_db)):
         "optimization_run_id": opt_run.id,
         "warnings": portfolio.warnings,
         "lineups": [serialize_lineup(lu, _players_by_id_lookup(db, lu)) for lu in lineups],
+    }
+
+
+@router.post("/{lineup_id}/late-swap")
+def late_swap_lineup(lineup_id: str, db: Session = Depends(get_db)):
+    """DK slates stagger kickoffs (early/late/SNF/MNF windows); once a
+    game has kicked off you can no longer swap a player out of — or into —
+    it, but everything in a game that hasn't started yet is still fair
+    game, and news (inactives, last-minute scratches) keeps landing right
+    up to those later kickoffs. This re-optimizes ONE existing lineup with
+    that rule enforced automatically:
+      - every rostered player whose game has already started is locked in
+        exactly as-is (can't be swapped out)
+      - every OTHER player whose game has already started is barred from
+        being newly added (can't swap someone in from a game already
+        under way)
+      - everyone else is fair game, re-optimized against whatever the
+        latest projections/ownership/simulation for this slate currently
+        say (a rebuild since the original lineup was made will already be
+        reflected here — this doesn't re-run ingestion itself)
+
+    Reuses generate_lineups()'s exact machinery via a synthetic
+    ManualOptimizeRequest — the only new logic here is computing the
+    lock/exclude sets from kickoff times instead of a person supplying
+    them by hand.
+    """
+    lineup = db.get(Lineup, lineup_id)
+    if not lineup:
+        raise HTTPException(404, "Lineup not found")
+    run = db.get(OptimizationRun, lineup.optimization_run_id)
+    slate = db.get(Slate, lineup.slate_id)
+    if not slate:
+        raise HTTPException(404, "Slate not found")
+
+    dk_rows = db.execute(select(DraftKingsPlayer).where(DraftKingsPlayer.slate_id == slate.id)).scalars().all()
+    game_ids = {row.game_id for row in dk_rows if row.game_id}
+    games_by_id = {g.id: g for g in db.execute(select(Game).where(Game.id.in_(game_ids))).scalars().all()}
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    def _is_started(kickoff: datetime.datetime) -> bool:
+        # kickoff_utc is stored naive (assumed UTC by convention, per its
+        # name) in this app's usual path, but tolerate an already-aware
+        # value too rather than assuming and risking a double-offset.
+        aware = kickoff if kickoff.tzinfo is not None else kickoff.replace(tzinfo=datetime.timezone.utc)
+        return aware <= now
+
+    started_game_ids = {gid for gid, g in games_by_id.items() if _is_started(g.kickoff_utc)}
+
+    if not started_game_ids:
+        raise HTTPException(400, "No games in this slate have started yet — nothing to late-swap")
+
+    dk_row_by_player_id = {row.player_id: row for row in dk_rows if row.player_id}
+    current_player_ids = {lp.player_id for lp in lineup.players}
+
+    locked_player_ids = [
+        pid for pid in current_player_ids
+        if (row := dk_row_by_player_id.get(pid)) and row.game_id in started_game_ids
+    ]
+    if len(locked_player_ids) == len(current_player_ids):
+        raise HTTPException(400, "Every game in this lineup has already started — nothing left to swap")
+
+    excluded_player_ids = [
+        row.player_id for row in dk_rows
+        if row.player_id and row.game_id in started_game_ids and row.player_id not in current_player_ids
+    ]
+
+    req = ManualOptimizeRequest(
+        slate_id=slate.id, num_lineups=1, objective=run.objective if run else "large_field_gpp",
+        locked_player_ids=locked_player_ids, excluded_player_ids=excluded_player_ids,
+    )
+    result = generate_lineups(req, db)
+    return {
+        **result,
+        "kept_from_original": len(locked_player_ids),
+        "swapped_slots": len(current_player_ids) - len(locked_player_ids),
     }
