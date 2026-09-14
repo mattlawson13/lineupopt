@@ -5,10 +5,11 @@ import BuildSlatePanel from "@/components/BuildSlatePanel";
 import PlayerPoolTable from "@/components/PlayerPoolTable";
 import LineupsPanel from "@/components/LineupsPanel";
 import ResolutionsPanel from "@/components/ResolutionsPanel";
+import LeverageView from "@/components/LeverageView";
 import PlayerDetailDrawer from "@/components/PlayerDetailDrawer";
 import { api, Lineup, PlayerRow, ResolutionSummaryStats, Slate } from "@/lib/api";
 
-type Tab = "build" | "players" | "lineups" | "resolve";
+type Tab = "build" | "players" | "leverage" | "lineups" | "resolve";
 
 // Slate.name is just "NFL Slate <dk_draft_group_id>" — the raw DK ID isn't
 // meaningful to a person picking a slate, so build a human label from the
@@ -90,7 +91,7 @@ export default function Home() {
             </select>
           )}
           <nav className="flex gap-1 rounded-lg border border-surface-border bg-surface-raised p-1">
-            {(["build", "players", "lineups", "resolve"] as Tab[]).map((t) => (
+            {(["build", "players", "leverage", "lineups", "resolve"] as Tab[]).map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -120,6 +121,12 @@ export default function Home() {
       {tab === "players" &&
         (players.length ? (
           <PlayerPoolTable players={players} onSelectPlayer={setSelectedPlayer} />
+        ) : (
+          <EmptyState text="No player pool yet — build a slate first." />
+        ))}
+      {tab === "leverage" &&
+        (players.length ? (
+          <LeverageView players={players} />
         ) : (
           <EmptyState text="No player pool yet — build a slate first." />
         ))}
