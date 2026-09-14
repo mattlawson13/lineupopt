@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, Lineup } from "@/lib/api";
+import { api, API_BASE, Lineup } from "@/lib/api";
 
 // CPT first (Showdown's premium slot leads on DK's own UI); FLEX last so
 // Classic's own FLEX doesn't collide with Showdown's 5 FLEX slots — both
@@ -77,6 +77,13 @@ export default function LineupsPanel({ lineups, slateId }: { lineups: Lineup[]; 
         <span className="text-xs text-slate-500">{localLineups.length} lineups</span>
         <div className="flex items-center gap-2">
           {generateError && <span className="text-[11px] text-danger">{generateError}</span>}
+          <a
+            href={`${API_BASE}/api/lineups/export_dk_csv?slate_id=${slateId}`}
+            title="Download a CSV in DraftKings' own bulk-upload format — copy its player columns into DK's downloaded contest-entry template (which has your real Entry ID/Contest ID) alongside it, then upload that to DK"
+            className="rounded border border-surface-border bg-surface px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:border-accent hover:text-accent"
+          >
+            Export to DraftKings
+          </a>
           <button
             onClick={handleGenerateMore}
             disabled={generatingMore}

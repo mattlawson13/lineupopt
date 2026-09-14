@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -17,6 +18,7 @@ from app.api.deps import get_db
 from app.api.schemas import ManualOptimizeRequest
 from app.api.serialize import serialize_lineup
 from app.config.loader import get_optimization_settings
+from app.export.dk_csv import build_dk_bulk_upload_csv
 from app.ingestion.slate_builder import _compute_correlation_scores, _resolve_contest_calibration
 from app.models.analytics import Correlation, OwnershipProjection, PlayerSimulationResult, SimulationRun
 from app.models.context_data import BettingLine
@@ -54,6 +56,38 @@ def list_lineups(slate_id: str, optimization_run_id: str | None = None, db: Sess
             query = query.where(Lineup.optimization_run_id == latest_run.id)
     lineups = db.execute(query.order_by(Lineup.ai_rank)).scalars().all()
     return [serialize_lineup(lu, _players_by_id_lookup(db, lu)) for lu in lineups]
+
+
+@router.get("/export_dk_csv")
+def export_dk_csv(slate_id: str, optimization_run_id: str | None = None, db: Session = Depends(get_db)):
+    """A CSV of the generated lineups in DraftKings' own bulk-upload
+    format (see export/dk_csv.py) — column headers matching DK's roster
+    slots, each cell "Player Name (dk_player_id)". Defaults to the
+    slate's latest optimization run, same as GET /api/lineups.
+    """
+    slate = db.get(Slate, slate_id)
+    if not slate:
+        raise HTTPException(404, "Slate not found")
+
+    query = select(Lineup).where(Lineup.slate_id == slate_id)
+    if optimization_run_id:
+        query = query.where(Lineup.optimization_run_id == optimization_run_id)
+    else:
+        latest_run = db.execute(
+            select(OptimizationRun).where(OptimizationRun.slate_id == slate_id).order_by(OptimizationRun.completed_at.desc())
+        ).scalars().first()
+        if latest_run:
+            query = query.where(Lineup.optimization_run_id == latest_run.id)
+    lineups = db.execute(query.order_by(Lineup.ai_rank)).scalars().all()
+    if not lineups:
+        raise HTTPException(404, "No lineups found for this slate — build or generate lineups first")
+
+    csv_text = build_dk_bulk_upload_csv(db, slate, lineups)
+    return Response(
+        content=csv_text,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="dk_upload_{slate.dk_draft_group_id}.csv"'},
+    )
 
 
 @router.get("/{lineup_id}")
