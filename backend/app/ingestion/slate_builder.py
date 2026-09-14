@@ -441,15 +441,29 @@ def _fetch_injuries(db: Session, team_abbrevs) -> tuple[dict, str | None]:
             # single build.
             if failures >= _INJURY_CIRCUIT_BREAKER_THRESHOLD and failures == attempted:
                 break
+
     warning = None
     if failures > 0 and failures == attempted:
-        warning = "ESPN injury endpoint unreachable from this environment — assuming all players healthy unless manually reported"
+        # site.api.espn.com (data_sources/injury.py) is blocked in this
+        # environment, but sports.core.api.espn.com — the same underlying
+        # ESPN injury data, a different host — is not (see
+        # features/espn_adapter.py's module docstring for why two ESPN
+        # subdomains behave differently here). Real fallback, not a second
+        # guess: only used because the primary source just failed outright.
+        try:
+            espn_out = espn_adapter.fetch_all_injuries(team_list)
+        except Exception as exc:  # noqa: BLE001 — best-effort fallback, never break the build
+            espn_out = {}
+            logging.getLogger(__name__).warning("espn_adapter.fetch_all_injuries failed: %s", exc)
+        if espn_out:
+            out.update(espn_out)
+            warning = f"ESPN's usual injury endpoint is blocked here — used {len(espn_out)} designation(s) from ESPN's core API instead"
+        else:
+            warning = "ESPN injury endpoint unreachable from this environment — assuming all players healthy unless manually reported"
 
-    # Manual reports (POST /api/injuries/import) always win over the live
-    # feed for a given player — that's the whole point of the fallback
-    # path, especially since the live ESPN feed is blocked outright in
-    # this environment. Ordered oldest-first so the latest report for a
-    # given player is what ends up in the dict.
+    # Manual reports (POST /api/injuries/import) always win over either
+    # live feed for a given player. Ordered oldest-first so the latest
+    # report for a given player is what ends up in the dict.
     from app.models.context_data import PlayerInjury
 
     manual_rows = db.execute(
@@ -459,8 +473,8 @@ def _fetch_injuries(db: Session, team_abbrevs) -> tuple[dict, str | None]:
     for injury, player in manual_rows:
         out[normalize_name(player.full_name)] = injury.status
         manual_count += 1
-    if warning and manual_count:
-        warning = f"ESPN injury endpoint unreachable — using {manual_count} manually-reported designation(s); everyone else assumed healthy"
+    if warning and manual_count and not out:
+        warning = f"ESPN injury endpoints unreachable — using {manual_count} manually-reported designation(s); everyone else assumed healthy"
     return out, warning
 
 

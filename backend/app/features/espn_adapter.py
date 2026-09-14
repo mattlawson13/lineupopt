@@ -55,6 +55,7 @@ TEAM_ID_TO_ABBREV = {
     "20": "NYJ", "21": "PHI", "23": "PIT", "26": "SEA", "25": "SF", "27": "TB",
     "10": "TEN", "28": "WSH",
 }
+ABBREV_TO_TEAM_ID = {v: k for k, v in TEAM_ID_TO_ABBREV.items()}
 
 # Also stable (ESPN's position taxonomy). Folds FB/HB into RB to match
 # NFL_POSITION_MAP in features/nflverse_adapter.py, so keys from this
@@ -93,6 +94,22 @@ def _get(client: httpx.Client, url: str, params: dict | None = None) -> dict:
     resp = client.get(url, params=params, timeout=_TIMEOUT)
     resp.raise_for_status()
     return resp.json()
+
+
+def _resolve_athlete_name(client: httpx.Client, athlete_ref: str) -> str:
+    """Full name for an athlete ref, via the module-level cache shared by
+    box-score and injury fetching alike (see _athlete_name_cache above).
+    """
+    athlete_id = _ref_id(athlete_ref)
+    name = _athlete_name_cache.get(athlete_id)
+    if name is None:
+        try:
+            athlete = _get(client, athlete_ref)
+            name = athlete.get("displayName") or athlete.get("fullName") or ""
+        except httpx.HTTPError:
+            name = ""
+        _athlete_name_cache[athlete_id] = name
+    return name
 
 
 def _stat_value(categories: list[dict], category: str, stat: str) -> float:
@@ -208,7 +225,6 @@ def _fetch_week_player_rows_uncached(season: int, week: int, season_type: int = 
                     pending.append({
                         "ref": stats_ref, "team": own, "opponent": opponent,
                         "position": position, "athlete_ref": athlete_ref,
-                        "athlete_id": _ref_id(athlete_ref),
                     })
 
         if not pending:
@@ -226,14 +242,7 @@ def _fetch_week_player_rows_uncached(season: int, week: int, season_type: int = 
             if not game_stats["pass_attempts"] and not game_stats["rush_attempts"] and not game_stats["targets"]:
                 return None  # listed but didn't meaningfully play (e.g. inactive)
 
-            name = _athlete_name_cache.get(item["athlete_id"])
-            if name is None:
-                try:
-                    athlete = _get(client, item["athlete_ref"])
-                    name = athlete.get("displayName") or athlete.get("fullName") or ""
-                except httpx.HTTPError:
-                    name = ""
-                _athlete_name_cache[item["athlete_id"]] = name
+            name = _resolve_athlete_name(client, item["athlete_ref"])
             if not name:
                 return None  # can't safely key this player for merging
 
@@ -260,6 +269,76 @@ def fetch_season_rows(season: int, through_week: int, season_type: int = 2) -> l
         except ESPNUnavailableError:
             break
     return rows
+
+
+# ESPN's injury `type.name` values -> this app's vocabulary (matches
+# InjuryStatus/the "healthy"|"questionable"|"doubtful"|"out"|"ir" set
+# already used throughout ingestion/slate_builder.py). ACTIVE means "no
+# current designation" (i.e. healthy) and is deliberately unmapped so
+# those entries get skipped — see fetch_all_injuries.
+INJURY_STATUS_MAP = {
+    "INJURY_STATUS_QUESTIONABLE": "questionable",
+    "INJURY_STATUS_DOUBTFUL": "doubtful",
+    "INJURY_STATUS_OUT": "out",
+    "INJURY_STATUS_IR": "ir",
+    "INJURY_STATUS_INJURED_RESERVE": "ir",
+    "INJURY_STATUS_SUSPENSION": "out",  # not an injury, but equally unavailable this week
+}
+
+
+def fetch_all_injuries(team_abbrevs: list[str]) -> dict[str, str]:
+    """{normalized_player_name: status} for every player league-wide who
+    currently carries a real injury designation, from ESPN's core API —
+    reachable from this environment, unlike site.api.espn.com (the host
+    data_sources/injury.py uses, 403-blocked here). Same underlying ESPN
+    injury data, different host.
+
+    Each team's injuries list actually returns *every* player with injury
+    history, most now resolved back to "Active" — those are skipped, since
+    "no current designation" already means healthy under this app's
+    default. Unrecognized/new status names are skipped the same way
+    (silently treating them as "no real signal") rather than guessed at.
+
+    Best-effort like the rest of this module: a team or player that fails
+    to fetch is just missing from the result, never raises.
+    """
+    with httpx.Client(follow_redirects=True) as client:
+        def list_team(abbrev: str) -> list[str]:
+            team_id = ABBREV_TO_TEAM_ID.get(normalize_team_abbreviation(abbrev))
+            if not team_id:
+                return []
+            try:
+                doc = _get(client, f"{BASE}/teams/{team_id}/injuries", params={"limit": 50})
+            except httpx.HTTPError:
+                return []
+            return [item["$ref"] for item in doc.get("items", [])]
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(16, len(team_abbrevs)) or 1) as pool:
+            refs = [ref for team_refs in pool.map(list_team, team_abbrevs) for ref in team_refs]
+
+        if not refs:
+            return {}
+
+        def fetch_one(ref: str) -> tuple[str, str] | None:
+            try:
+                doc = _get(client, ref)
+            except httpx.HTTPError:
+                return None
+            status = INJURY_STATUS_MAP.get(doc.get("type", {}).get("name", ""))
+            if not status:
+                return None  # Active or unrecognized -> no current designation
+            athlete_ref = doc.get("athlete", {}).get("$ref")
+            if not athlete_ref:
+                return None
+            name = _resolve_athlete_name(client, athlete_ref)
+            if not name:
+                return None
+            return normalize_name(name), status
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(16, len(refs))) as pool:
+            results = list(pool.map(fetch_one, refs))
+
+    return {name: status for r in results if r is not None for name, status in [r]}
 
 
 def build_game_logs_by_player(rows: list[dict]) -> dict[tuple[str, str], list[dict]]:
