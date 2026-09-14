@@ -156,14 +156,19 @@ def resolve_slate(db: Session, slate_id: str, optimization_run_id: str | None = 
     errors: list[float] = []
     biggest_misses: list[dict] = []
     resolved_count = 0
+    matched_count = 0
+    resolvable_count = 0
 
     for row in dk_rows:
         if not row.player_id or row.dk_position in UNRESOLVABLE_POSITIONS:
             continue
+        resolvable_count += 1
         if row.dk_position == "DST":
             match = actual_dst_by_team.get(row.team_abbreviation)
         else:
             match = actual_by_norm_name.get(normalize_name(row.display_name))
+        if match:
+            matched_count += 1
         # No row in the box score reads as 0 DK points (inactive/DNP/zero
         # involvement, which is the overwhelmingly common case) rather
         # than as a resolution failure — we can't fully distinguish that
@@ -188,6 +193,21 @@ def resolve_slate(db: Session, slate_id: str, optimization_run_id: str | None = 
                 "name": player.full_name if player else row.display_name, "position": row.dk_position,
                 "projected": projected, "actual": points, "error": error,
             })
+
+    # A week's data can be real and non-empty while THIS slate's specific
+    # game(s) still haven't been played — e.g. a Showdown slate for a
+    # Monday game while the rest of the week is already final (confirmed
+    # live: resolving such a slate produced a false "success" with every
+    # single player at 0 actual points, indistinguishable from a real
+    # blowout-inactive slate without this check). Zero matches across an
+    # entire slate is a data-availability signal, not "everyone was
+    # inactive" — nothing here gets persisted since this raises before
+    # the commit at the end of this function.
+    if resolvable_count > 0 and matched_count == 0:
+        raise ResolutionUnavailableError(
+            f"This slate's game(s) haven't finished yet — no {slate.season} week {slate.week} "
+            "results matched any of its players, though other games that week may already be final"
+        )
 
     # K still gets 0 in the retro-optimal solve (never projected on either
     # source — see module docstring) so the solver just spends the least

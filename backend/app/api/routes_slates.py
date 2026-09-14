@@ -201,3 +201,19 @@ def list_slate_resolutions(slate_id: str, db: Session = Depends(get_db)):
         }
         for r in rows
     ]
+
+
+@router.delete("/{slate_id}/resolutions/{resolution_id}")
+def delete_slate_resolution(slate_id: str, resolution_id: str, db: Session = Depends(get_db)):
+    """Clears a resolution so the slate can be re-resolved from scratch —
+    e.g. one computed before its game(s) had actually finished (a stale
+    or otherwise bad resolution would otherwise block resolve_all from
+    ever retrying that slate, since it only skips slates that already
+    have *a* resolution, not a *good* one).
+    """
+    resolution = db.get(SlateResolution, resolution_id)
+    if not resolution or resolution.slate_id != slate_id:
+        raise HTTPException(404, "Resolution not found")
+    db.delete(resolution)
+    db.commit()
+    return {"deleted": resolution_id}
