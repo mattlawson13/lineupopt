@@ -69,6 +69,11 @@ class BuildOptions:
     num_lineups: int = 20
     objective: str = "large_field_gpp"
     seed: int | None = None
+    # Optional: a specific DK contest to calibrate the objective against
+    # (see optimization/contest_calibration.py) — when set, the fixed
+    # contest_modes weight bucket for `objective` is replaced with weights
+    # scaled to this contest's real field size.
+    dk_contest_id: str | None = None
 
 
 def run_build_slate(
@@ -202,11 +207,14 @@ def run_build_slate(
 
     # ---- 11. Optimize lineups ------------------------------------------------
     yield BuildProgressEvent("optimize", "running", f"Generating {options.num_lineups} lineups...")
-    opt_run, lineups = _optimize_lineups(
+    opt_run, lineups, calibration_note = _optimize_lineups(
         db, slate, dk_player_rows, ensemble_by_player_id, ownership_by_player_id, sim_result, sim_run, options,
         game_env_by_game_id, correlation_entries,
     )
-    yield BuildProgressEvent("optimize", "success", f"{len(lineups)} lineups generated")
+    optimize_detail = f"{len(lineups)} lineups generated"
+    if calibration_note:
+        optimize_detail += f" — {calibration_note}"
+    yield BuildProgressEvent("optimize", "success", optimize_detail)
     db.commit()
 
     # ---- 12. AI-rank / explain --------------------------------------------
@@ -900,12 +908,38 @@ def _compute_correlation_scores(correlation_entries, player_ids: set[str]) -> di
     return scores
 
 
+def _resolve_contest_calibration(objective: str, dk_contest_id: str | None) -> tuple[dict | None, str | None]:
+    """(weights_override, note) for a specific DK contest — see
+    optimization/contest_calibration.py. Cash doesn't scale with field
+    size (a cash lineup should be safe regardless of how many entries are
+    in the contest), so calibration only applies to GPP-style objectives.
+    Best-effort: any failure to reach DK's contest listing just means no
+    override, never a build failure.
+    """
+    if not dk_contest_id or objective == "cash":
+        return None, None
+    from app.data_sources.draftkings import DraftKingsApiSource
+    from app.optimization.contest_calibration import contest_calibrated_weights
+
+    try:
+        contests = DraftKingsApiSource().get_nfl_contests().data
+    except SourceUnavailableError:
+        return None, None
+    contest = next((c for c in contests if c.dk_contest_id == dk_contest_id), None)
+    if not contest:
+        return None, None
+    weights = contest_calibrated_weights(contest.max_entries)
+    note = f"Calibrated to \"{contest.name}\" ({contest.max_entries:,}-entry field)"
+    return weights, note
+
+
 def _optimize_lineups(db, slate, dk_player_rows, ensemble_by_player_id, ownership_by_player_id, sim_result, sim_run, options: BuildOptions, game_env_by_game_id: dict | None = None, correlation_entries=None):
     from app.config.loader import get_optimization_settings
 
     opt_cfg = get_optimization_settings()
     mode_cfg = opt_cfg["contest_modes"].get(options.objective, opt_cfg["contest_modes"]["large_field_gpp"])
-    weights = mode_cfg["objective_weights"]
+    calibrated_weights, calibration_note = _resolve_contest_calibration(options.objective, options.dk_contest_id)
+    weights = calibrated_weights or mode_cfg["objective_weights"]
 
     correlation_scores = _compute_correlation_scores(
         correlation_entries or [], {r.player_id for r in dk_player_rows if r.player_id}
@@ -965,7 +999,9 @@ def _optimize_lineups(db, slate, dk_player_rows, ensemble_by_player_id, ownershi
 
     opt_run = OptimizationRun(
         slate_id=slate.id, simulation_run_id=sim_run.id, objective=options.objective,
-        num_lineups_requested=options.num_lineups, settings={"weights": weights}, status="running",
+        num_lineups_requested=options.num_lineups,
+        settings={"weights": weights, "contest_calibration": calibration_note, "dk_contest_id": options.dk_contest_id},
+        status="running",
     )
     db.add(opt_run)
     db.flush()
@@ -1019,4 +1055,4 @@ def _optimize_lineups(db, slate, dk_player_rows, ensemble_by_player_id, ownershi
     opt_run.num_lineups_generated = len(lineups)
     opt_run.status = "completed"
     opt_run.completed_at = datetime.datetime.now(datetime.timezone.utc)
-    return opt_run, lineups
+    return opt_run, lineups, calibration_note

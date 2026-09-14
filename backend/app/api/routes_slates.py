@@ -84,6 +84,30 @@ def list_available_dk_slates():
     return slates
 
 
+@router.get("/available/{dk_draft_group_id}/contests")
+def list_contests_for_draft_group(dk_draft_group_id: str):
+    """Individual contests within one draft group (unlike /available above,
+    which collapses a whole group into one representative row) — lets the
+    frontend offer "which specific contest are you entering?" so the build
+    can calibrate its objective to that contest's real field size (see
+    optimization/contest_calibration.py) rather than a generic GPP bucket.
+    """
+    try:
+        result = DraftKingsApiSource().get_nfl_contests()
+    except SourceUnavailableError as exc:
+        raise HTTPException(503, str(exc))
+
+    contests = [c for c in result.data if c.dk_draft_group_id == dk_draft_group_id]
+    contests.sort(key=lambda c: c.total_prizes, reverse=True)
+    return [
+        {
+            "dk_contest_id": c.dk_contest_id, "name": c.name, "entry_fee": c.entry_fee,
+            "total_prizes": c.total_prizes, "max_entries": c.max_entries, "is_guaranteed": c.is_guaranteed,
+        }
+        for c in contests
+    ]
+
+
 @router.get("/{slate_id}")
 def get_slate(slate_id: str, db: Session = Depends(get_db)):
     slate = db.get(Slate, slate_id)

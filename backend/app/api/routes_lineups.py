@@ -17,7 +17,7 @@ from app.api.deps import get_db
 from app.api.schemas import ManualOptimizeRequest
 from app.api.serialize import serialize_lineup
 from app.config.loader import get_optimization_settings
-from app.ingestion.slate_builder import _compute_correlation_scores
+from app.ingestion.slate_builder import _compute_correlation_scores, _resolve_contest_calibration
 from app.models.analytics import Correlation, OwnershipProjection, PlayerSimulationResult, SimulationRun
 from app.models.context_data import BettingLine
 from app.models.core import Game, Player
@@ -95,7 +95,8 @@ def generate_lineups(req: ManualOptimizeRequest, db: Session = Depends(get_db)):
 
     opt_cfg = get_optimization_settings()
     mode_cfg = opt_cfg["contest_modes"].get(req.objective, opt_cfg["contest_modes"]["large_field_gpp"])
-    weights = mode_cfg["objective_weights"]
+    calibrated_weights, calibration_note = _resolve_contest_calibration(req.objective, req.dk_contest_id)
+    weights = calibrated_weights or mode_cfg["objective_weights"]
 
     correlation_rows = db.execute(select(Correlation).where(Correlation.slate_id == req.slate_id)).scalars().all()
     correlation_scores = _compute_correlation_scores(correlation_rows, {row.player_id for row in dk_rows if row.player_id})
@@ -143,7 +144,9 @@ def generate_lineups(req: ManualOptimizeRequest, db: Session = Depends(get_db)):
 
     opt_run = OptimizationRun(
         slate_id=slate.id, simulation_run_id=latest_sim.id if latest_sim else None, objective=req.objective,
-        num_lineups_requested=req.num_lineups, settings={"weights": weights, "manual": req.model_dump()}, status="running",
+        num_lineups_requested=req.num_lineups,
+        settings={"weights": weights, "contest_calibration": calibration_note, "manual": req.model_dump()},
+        status="running",
     )
     db.add(opt_run)
     db.flush()
@@ -206,6 +209,7 @@ def generate_lineups(req: ManualOptimizeRequest, db: Session = Depends(get_db)):
     return {
         "optimization_run_id": opt_run.id,
         "warnings": portfolio.warnings,
+        "contest_calibration": calibration_note,
         "lineups": [serialize_lineup(lu, _players_by_id_lookup(db, lu)) for lu in lineups],
     }
 
@@ -273,8 +277,14 @@ def late_swap_lineup(lineup_id: str, db: Session = Depends(get_db)):
         if row.player_id and row.game_id in started_game_ids and row.player_id not in current_player_ids
     ]
 
+    # Carry forward the original build's contest calibration (if any) so a
+    # late swap stays optimized for the same specific contest rather than
+    # silently reverting to the generic objective bucket.
+    original_dk_contest_id = (run.settings or {}).get("dk_contest_id") if run else None
+
     req = ManualOptimizeRequest(
         slate_id=slate.id, num_lineups=1, objective=run.objective if run else "large_field_gpp",
+        dk_contest_id=original_dk_contest_id,
         locked_player_ids=locked_player_ids, excluded_player_ids=excluded_player_ids,
     )
     result = generate_lineups(req, db)

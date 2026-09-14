@@ -10,12 +10,18 @@ class BuildSlateRequest(BaseModel):
     num_lineups: int = 20
     objective: str = "large_field_gpp"  # cash | single_entry | small_field_gpp | large_field_gpp
     seed: int | None = None
+    # Optional: a specific DK contest ID to calibrate the objective against
+    # (optimization/contest_calibration.py) — e.g. the exact contest you're
+    # entering, so a 47,562-entry contest and a 500,000-entry contest don't
+    # get treated identically just because both are "large_field_gpp".
+    dk_contest_id: str | None = None
 
 
 class ManualOptimizeRequest(BaseModel):
     slate_id: str
     num_lineups: int = 20
     objective: str = "large_field_gpp"
+    dk_contest_id: str | None = None
     locked_player_ids: list[str] = []
     excluded_player_ids: list[str] = []
     forced_team_min_counts: dict[str, int] = {}

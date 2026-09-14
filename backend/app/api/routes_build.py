@@ -40,7 +40,7 @@ def build_slate(req: BuildSlateRequest):
     """Build a slate live from DraftKings' API (no file upload needed)."""
     options = BuildOptions(
         num_simulations=req.num_simulations, num_lineups=req.num_lineups,
-        objective=req.objective, seed=req.seed,
+        objective=req.objective, seed=req.seed, dk_contest_id=req.dk_contest_id,
     )
     return StreamingResponse(
         _sse_stream(req.dk_draft_group_id, None, options), media_type="text/event-stream"
