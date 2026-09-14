@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from app.correlations.engine import CorrelationEntry, CorrelationPlayer, build_correlation_matrix
 from app.data_sources.base import SourceUnavailableError
 from app.data_sources.betting import BettingSource
+from app.data_sources.player_props import PlayerPropsSource
 from app.data_sources.draftkings import DraftKingsApiSource, DraftKingsCsvSource, DraftKingsSlate
 from app.data_sources.injury import InjurySource
 from app.data_sources.nfl_stats import NFLStatsSource
@@ -30,6 +31,7 @@ from app.data_sources.weather import WeatherSource
 from app.features import espn_adapter
 from app.features.game_environment import compute_game_environment
 from app.features.matchup import compute_matchup_zscores
+from app.features.player_props import build_prop_stat_lines, market_projection_from_props
 from app.features.nflverse_adapter import build_fpts_allowed_by_team_position, build_game_logs_by_player
 from app.features.usage_features import compute_usage_snapshot
 from app.models.core import Game, Player, Team
@@ -165,6 +167,14 @@ def run_build_slate(
         yield BuildProgressEvent("historical_stats", "success", f"{len(game_logs)} player game-log histories loaded")
     matchup_zscores = compute_matchup_zscores(fpts_allowed) if fpts_allowed else {}
 
+    # ---- 6b. Player-prop market signal --------------------------------------
+    yield BuildProgressEvent("player_props", "running", "Fetching player-prop odds...")
+    prop_stat_lines, props_warning = _fetch_player_props(game_by_teams)
+    if props_warning:
+        yield BuildProgressEvent("player_props", "warning", props_warning)
+    else:
+        yield BuildProgressEvent("player_props", "success", f"Real prop lines matched for {len(prop_stat_lines)} players")
+
     # ---- 7. Projection ensemble --------------------------------------------
     yield BuildProgressEvent("projections", "running", "Building projection ensemble...")
     model_version = ModelVersion(
@@ -178,6 +188,7 @@ def run_build_slate(
     ensemble_by_player_id, why_panels = _build_projections(
         db, slate, dk_player_rows, team_by_abbrev, game_by_teams, game_env_by_game_id,
         injury_by_norm_name, game_logs, matchup_zscores, model_version, effective_depth_ranks,
+        prop_stat_lines,
     )
     yield BuildProgressEvent("projections", "success", f"Ensemble projections built for {len(ensemble_by_player_id)} players")
     db.commit()
@@ -491,6 +502,49 @@ def _fetch_and_apply_betting_lines(db: Session, game_by_teams: dict) -> tuple[di
         return game_env, f"{exc} — using neutral (0 spread / 44 total) defaults"
 
 
+def _fetch_player_props(game_by_teams: dict) -> tuple[dict, str | None]:
+    """Real per-player prop-derived market stat lines, scoped to just this
+    slate's games — see data_sources/player_props.py for why this must
+    never fetch a whole week (quota cost scales with games x markets).
+    Best-effort at every level: any failure just means the affected
+    player(s) fall back to ensemble.market_projection_from_vegas()'s
+    team-total heuristic, never a failed build.
+    """
+    from app.sports.nfl.team_names import FULL_NAME_TO_ABBREV
+
+    try:
+        source = PlayerPropsSource()
+        events = source.get_nfl_events().data
+    except SourceUnavailableError as exc:
+        return {}, f"{exc} — market projections will use the team-total heuristic only"
+
+    by_abbrev_pair = {}
+    for e in events:
+        home_abbrev = FULL_NAME_TO_ABBREV.get(e.home_team)
+        away_abbrev = FULL_NAME_TO_ABBREV.get(e.away_team)
+        if home_abbrev and away_abbrev:
+            by_abbrev_pair[(home_abbrev, away_abbrev)] = e
+
+    outcomes_by_event: dict[str, list] = {}
+    matched = 0
+    for game in game_by_teams.values():
+        event = by_abbrev_pair.get((game.home_team.abbreviation, game.away_team.abbreviation))
+        if not event:
+            continue
+        try:
+            outcomes_by_event[event.event_id] = source.get_event_player_props(event.event_id).data
+            matched += 1
+        except SourceUnavailableError:
+            continue
+
+    if matched == 0:
+        return {}, "No player-prop coverage matched this slate's games — using the team-total heuristic only"
+
+    stat_lines = build_prop_stat_lines(outcomes_by_event)
+    warning = None if matched == len(game_by_teams) else f"Player props matched {matched}/{len(game_by_teams)} games — rest using the team-total heuristic"
+    return stat_lines, warning
+
+
 def _fetch_and_apply_weather(db: Session, game_by_teams: dict) -> list[str]:
     warnings: list[str] = []
     source = WeatherSource()
@@ -791,7 +845,9 @@ def _depth_chart_multiplier(position: str, effective_rank: int | None) -> float:
 def _build_projections(
     db, slate, dk_player_rows, team_by_abbrev, game_by_teams, game_env_by_game_id,
     injury_by_norm_name, game_logs, matchup_zscores, model_version, effective_depth_ranks,
+    prop_stat_lines: dict | None = None,
 ):
+    prop_stat_lines = prop_stat_lines or {}
     proj_source_model = _get_or_create_projection_source(db, "proprietary_model", "model")
     ensemble_by_player_id: dict[str, dict] = {}
     why_panels: dict[str, dict] = {}
@@ -853,8 +909,22 @@ def _build_projections(
         # Scaling by the same availability (injury x depth-chart) multiplier
         # already applied to the model component fixes it at the source
         # rather than requiring the ensemble weight to be re-tuned.
-        market = market_projection_from_vegas(position, ctx.implied_team_total, ctx.opponent_implied_total) * availability
-        sources = SourceProjections(model_projection=component.projected_points, model_std_dev=component.model_uncertainty, market_projection=market)
+        # Real per-player prop lines (features/player_props.py) are a
+        # strictly better market signal than the team-total heuristic below
+        # when this player has coverage — a prop line is priced for THIS
+        # player, not just "whoever nominally plays this position." Same
+        # availability scaling either way, for the same reason noted above.
+        props_market = market_projection_from_props(prop_stat_lines.get(norm_name, {}), position)
+        source_confidences = {}
+        if props_market is not None:
+            market = props_market * availability
+            source_confidences["market_projection"] = 1.0
+        else:
+            market = market_projection_from_vegas(position, ctx.implied_team_total, ctx.opponent_implied_total) * availability
+        sources = SourceProjections(
+            model_projection=component.projected_points, model_std_dev=component.model_uncertainty,
+            market_projection=market, source_confidences=source_confidences,
+        )
         ensemble = compute_ensemble(sources, position)
 
         db.add(Projection(
