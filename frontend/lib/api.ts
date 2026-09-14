@@ -240,6 +240,25 @@ export const api = {
     return body as ResolutionSummary;
   },
   getResolutionPatterns: () => getJSON<ResolutionPatterns>("/api/resolutions/patterns"),
+
+  exportDkCsv: async (slateId: string) => {
+    const res = await fetch(`${API_BASE}/api/lineups/export_dk_csv?slate_id=${slateId}`);
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      throw new Error(body?.detail || `HTTP ${res.status}`);
+    }
+    const blob = await res.blob();
+    const match = res.headers.get("content-disposition")?.match(/filename="([^"]+)"/);
+    const filename = match?.[1] || `dk_upload_${slateId}.csv`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
   getResolutionSummary: () => getJSON<ResolutionSummaryStats>("/api/resolutions/summary"),
 
   resolveAllSlates: async () => {

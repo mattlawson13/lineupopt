@@ -139,30 +139,78 @@ def generate_portfolio(
 
     effective_max_overlap = min(diversification.max_lineup_overlap, rules.roster_size - diversification.min_unique_players)
 
-    for i in range(num_lineups):
-        pool = copy.deepcopy(players)
-        for p in pool:
-            if exposure_count[p.player_id] >= max_allowed:
-                p.excluded = True
-            if p.position == "QB" and qb_count.get(p.player_id, 0) >= max_qb_allowed:
-                p.excluded = True
-            if captain_count.get(p.player_id, 0) >= max_captain_allowed:
-                p.captain_excluded = True
-            if team_count.get(p.team, 0) >= max_team_allowed:
-                p.excluded = True
-            if randomness_pct > 0:
-                jitter = rng.uniform(-randomness_pct / 100, randomness_pct / 100)
-                p.objective_value = round(p.objective_value * (1 + jitter), 4)
+    # Exposure caps exist to keep a portfolio diverse, not to cap how many
+    # lineups can exist — a thin pool (Showdown especially, ~15-40 players
+    # after the eligibility floor excludes unplayable ones) can genuinely
+    # run out of never-yet-capped players well before a large requested
+    # count is reached. Previously that just stopped the whole portfolio
+    # early ("Stopped after 12/20 lineups"). Confirmed live: a real
+    # Showdown request for 20 lineups fell short for exactly this reason.
+    # Instead of giving up, each lineup progressively relaxes exposure
+    # caps (allowing already-used GOOD players to repeat more) and, as a
+    # last resort, the overlap/uniqueness constraint against prior
+    # lineups — real DK contest entries can legitimately repeat a lineup
+    # anyway. What NEVER relaxes is the eligibility floor: `players` was
+    # already filtered to real, playable options before this function was
+    # called (see ingestion/slate_builder.py's _optimize_lineups), so a
+    # relaxed lineup is a *less diverse* real lineup, never a bad one.
+    _RELAXATION_STEPS = [1.0, 1.5, 2.5, 5.0, None]  # None = fully uncapped exposure
 
+    for i in range(num_lineups):
         stack_team = forced_qb_stack_teams[i % len(forced_qb_stack_teams)] if forced_qb_stack_teams else None
-        try:
-            lineup = _solve_one_lineup(
-                pool, rules, forced_team_min_counts, stack_team, previous_player_sets,
-                effective_max_overlap, min_salary_used, i, warnings,
-            )
-        except InfeasibleLineupError as exc:
-            warnings.append(f"Stopped after {len(lineups)}/{num_lineups} lineups — solver infeasible: {exc}")
-            break
+        lineup: LineupResult | None = None
+        last_exc: InfeasibleLineupError | None = None
+        relaxed = False
+
+        for relax_mult in _RELAXATION_STEPS:
+            pool = copy.deepcopy(players)
+            for p in pool:
+                if relax_mult is not None:
+                    eff_max_allowed = max(max_allowed, math.ceil(max_allowed * relax_mult))
+                    eff_max_team_allowed = max(max_team_allowed, math.ceil(max_team_allowed * relax_mult))
+                    eff_max_qb_allowed = max(max_qb_allowed, math.ceil(max_qb_allowed * relax_mult))
+                    eff_max_captain_allowed = max(max_captain_allowed, math.ceil(max_captain_allowed * relax_mult))
+                    if exposure_count[p.player_id] >= eff_max_allowed:
+                        p.excluded = True
+                    if p.position == "QB" and qb_count.get(p.player_id, 0) >= eff_max_qb_allowed:
+                        p.excluded = True
+                    if captain_count.get(p.player_id, 0) >= eff_max_captain_allowed:
+                        p.captain_excluded = True
+                    if team_count.get(p.team, 0) >= eff_max_team_allowed:
+                        p.excluded = True
+                if randomness_pct > 0:
+                    jitter = rng.uniform(-randomness_pct / 100, randomness_pct / 100)
+                    p.objective_value = round(p.objective_value * (1 + jitter), 4)
+
+            try:
+                lineup = _solve_one_lineup(
+                    pool, rules, forced_team_min_counts, stack_team, previous_player_sets,
+                    effective_max_overlap, min_salary_used, i, warnings,
+                )
+                relaxed = relax_mult != 1.0
+                break
+            except InfeasibleLineupError as exc:
+                last_exc = exc
+                continue
+
+        if lineup is None:
+            # Even a fully exposure-uncapped pool couldn't produce a legal
+            # roster — the overlap/uniqueness constraint against prior
+            # lineups is the last thing left to relax before truly giving
+            # up (this pool is too small to build a real, DK-legal lineup
+            # under real constraints like min_teams_represented, not just
+            # too small to keep it diverse).
+            try:
+                lineup = _solve_one_lineup(
+                    copy.deepcopy(players), rules, forced_team_min_counts, stack_team, [],
+                    rules.roster_size, min_salary_used, i, warnings,
+                )
+                warnings.append(f"Lineup {i + 1}: repeats an earlier lineup's players — pool too thin to keep every lineup unique at this count")
+            except InfeasibleLineupError as exc:
+                warnings.append(f"Stopped after {len(lineups)}/{num_lineups} lineups — solver infeasible even unconstrained: {exc}")
+                break
+        elif relaxed:
+            warnings.append(f"Lineup {i + 1}: relaxed exposure caps to stay feasible (pool exhausted at the normal diversity limit)")
 
         lineups.append(lineup)
         previous_player_sets.append(lineup.player_ids)

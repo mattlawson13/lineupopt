@@ -61,8 +61,8 @@ class DraftKingsContestSummary:
 
 @dataclasses.dataclass
 class DraftKingsPlayerRow:
-    dk_player_id: str
-    dk_draftable_id: str | None
+    dk_player_id: str  # DK's stable cross-slate/cross-season person ID ("playerDkId") — internal matching only, NEVER what DK's own upload CSV wants as a player ID
+    dk_draftable_id: str | None  # DK's real per-slate, per-roster-slot upload ID ("draftableId") — this is what belongs in an export back to DK. FLEX/base-priced slot for Showdown.
     display_name: str
     position: str
     salary: int
@@ -72,6 +72,13 @@ class DraftKingsPlayerRow:
     game_start_time_utc: datetime.datetime | None
     roster_status: str  # active | questionable | out | scratched
     avg_points_per_game: float | None = None
+    # Showdown only: the SAME player's draftableId for the CPT slot
+    # specifically — confirmed live (real DK upload template, 2026-09-14):
+    # DK assigns a genuinely different numeric ID per (player, roster
+    # slot), e.g. Kenneth Walker III was draftableId 44105012 as CPT but
+    # 44104957 as FLEX. Using the FLEX id in a CPT column (or vice versa)
+    # gets the row silently rejected by DK's upload validator.
+    dk_captain_draftable_id: str | None = None
 
 
 @dataclasses.dataclass
@@ -164,6 +171,7 @@ class DraftKingsApiSource(DataSource):
 
         is_showdown = False
         chosen_raws: list[dict] = []
+        captain_draftable_id_by_pid: dict[str, str] = {}
         for pid, raws in by_player.items():
             if len(raws) >= 2:
                 by_salary = sorted(raws, key=lambda r: r.get("salary", 0))
@@ -171,6 +179,9 @@ class DraftKingsApiSource(DataSource):
                 if lo > 0 and abs(hi / lo - 1.5) < 0.01:
                     is_showdown = True
                     chosen_raws.append(by_salary[0])
+                    cpt_draftable_id = by_salary[-1].get("draftableId")
+                    if cpt_draftable_id:
+                        captain_draftable_id_by_pid[pid] = str(cpt_draftable_id)
                     continue
             chosen_raws.append(raws[0])
 
@@ -193,6 +204,7 @@ class DraftKingsApiSource(DataSource):
                     DraftKingsPlayerRow(
                         dk_player_id=str(raw["playerDkId"]),
                         dk_draftable_id=str(raw.get("draftableId")) if raw.get("draftableId") else None,
+                        dk_captain_draftable_id=captain_draftable_id_by_pid.get(str(raw.get("playerDkId"))),
                         display_name=raw.get("displayName", ""),
                         position=raw.get("position", ""),
                         salary=int(raw.get("salary", 0)),

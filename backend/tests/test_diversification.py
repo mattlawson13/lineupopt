@@ -68,6 +68,20 @@ def make_showdown_pool():
     return players
 
 
+def test_large_request_from_thin_pool_still_generates_full_count():
+    # A real user complaint: requesting more lineups than a thin pool
+    # (Showdown's ~20-30 players) could normally diversify under the
+    # default exposure caps used to stop the whole portfolio early
+    # ("Stopped after 12/20 lineups"). Exposure caps should relax to keep
+    # producing real lineups (allowing more repeats of good players)
+    # rather than capping how many lineups can exist at all.
+    players = make_showdown_pool()
+    rules = get_contest_rules("nfl", "showdown")
+    diversification = DiversificationSettings()  # default caps, e.g. max_player_exposure_pct=40%
+    result = generate_portfolio(players, rules, num_lineups=40, diversification=diversification, randomness_pct=8.0, seed=7)
+    assert len(result.lineups) == 40
+
+
 def test_captain_exposure_cap_respected():
     # Reproduces the real fix: nothing previously stopped the same player
     # from being CPT (DK Showdown's 1.5x slot) in every lineup a portfolio

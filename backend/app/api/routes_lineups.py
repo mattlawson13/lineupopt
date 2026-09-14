@@ -18,7 +18,7 @@ from app.api.deps import get_db
 from app.api.schemas import ManualOptimizeRequest
 from app.api.serialize import serialize_lineup
 from app.config.loader import get_optimization_settings
-from app.export.dk_csv import build_dk_bulk_upload_csv
+from app.export.dk_csv import MissingDraftableIdError, build_dk_bulk_upload_csv
 from app.ingestion.slate_builder import _compute_correlation_scores, _resolve_contest_calibration
 from app.models.analytics import Correlation, OwnershipProjection, PlayerSimulationResult, SimulationRun
 from app.models.context_data import BettingLine
@@ -62,8 +62,9 @@ def list_lineups(slate_id: str, optimization_run_id: str | None = None, db: Sess
 def export_dk_csv(slate_id: str, optimization_run_id: str | None = None, db: Session = Depends(get_db)):
     """A CSV of the generated lineups in DraftKings' own bulk-upload
     format (see export/dk_csv.py) — column headers matching DK's roster
-    slots, each cell "Player Name (dk_player_id)". Defaults to the
-    slate's latest optimization run, same as GET /api/lineups.
+    slots, each cell "Player Name (dk_draftable_id)" using DK's real
+    per-slate upload ID. Defaults to the slate's latest optimization run,
+    same as GET /api/lineups.
     """
     slate = db.get(Slate, slate_id)
     if not slate:
@@ -82,7 +83,10 @@ def export_dk_csv(slate_id: str, optimization_run_id: str | None = None, db: Ses
     if not lineups:
         raise HTTPException(404, "No lineups found for this slate — build or generate lineups first")
 
-    csv_text = build_dk_bulk_upload_csv(db, slate, lineups)
+    try:
+        csv_text = build_dk_bulk_upload_csv(db, slate, lineups)
+    except MissingDraftableIdError as exc:
+        raise HTTPException(409, str(exc))
     return Response(
         content=csv_text,
         media_type="text/csv",

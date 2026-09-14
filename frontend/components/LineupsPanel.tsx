@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, API_BASE, Lineup } from "@/lib/api";
+import { api, Lineup } from "@/lib/api";
 
 // CPT first (Showdown's premium slot leads on DK's own UI); FLEX last so
 // Classic's own FLEX doesn't collide with Showdown's 5 FLEX slots — both
@@ -21,6 +21,8 @@ export default function LineupsPanel({ lineups, slateId }: { lineups: Lineup[]; 
   const [swapError, setSwapError] = useState<Record<string, string>>({});
   const [generatingMore, setGeneratingMore] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   useEffect(() => setLocalLineups(lineups), [lineups]);
 
@@ -63,6 +65,18 @@ export default function LineupsPanel({ lineups, slateId }: { lineups: Lineup[]; 
     }
   };
 
+  const handleExport = async () => {
+    setExporting(true);
+    setExportError(null);
+    try {
+      await api.exportDkCsv(slateId);
+    } catch (e: any) {
+      setExportError(e?.message || String(e));
+    } finally {
+      setExporting(false);
+    }
+  };
+
   if (!localLineups.length) {
     return (
       <div className="rounded-lg border border-surface-border bg-surface-raised p-8 text-center text-sm text-slate-500">
@@ -77,13 +91,15 @@ export default function LineupsPanel({ lineups, slateId }: { lineups: Lineup[]; 
         <span className="text-xs text-slate-500">{localLineups.length} lineups</span>
         <div className="flex items-center gap-2">
           {generateError && <span className="text-[11px] text-danger">{generateError}</span>}
-          <a
-            href={`${API_BASE}/api/lineups/export_dk_csv?slate_id=${slateId}`}
+          {exportError && <span className="text-[11px] text-danger">{exportError}</span>}
+          <button
+            onClick={handleExport}
+            disabled={exporting}
             title="Download a CSV in DraftKings' own bulk-upload format — copy its player columns into DK's downloaded contest-entry template (which has your real Entry ID/Contest ID) alongside it, then upload that to DK"
-            className="rounded border border-surface-border bg-surface px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:border-accent hover:text-accent"
+            className="rounded border border-surface-border bg-surface px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
           >
-            Export to DraftKings
-          </a>
+            {exporting ? "Exporting…" : "Export to DraftKings"}
+          </button>
           <button
             onClick={handleGenerateMore}
             disabled={generatingMore}

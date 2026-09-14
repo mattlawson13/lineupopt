@@ -428,6 +428,7 @@ def _persist_slate_entities(db: Session, dk_slate: DraftKingsSlate, run_id: str)
         if not dk_player:
             dk_player = DraftKingsPlayer(
                 slate_id=slate.id, player_id=player.id, dk_player_id=row.dk_player_id,
+                dk_draftable_id=row.dk_draftable_id, dk_captain_draftable_id=row.dk_captain_draftable_id,
                 display_name=row.display_name, dk_position=row.position, team_abbreviation=team_abbrev,
                 opponent_abbreviation=opp_abbrev, game_id=game.id if game else None,
                 roster_status=row.roster_status,
@@ -436,6 +437,12 @@ def _persist_slate_entities(db: Session, dk_slate: DraftKingsSlate, run_id: str)
             db.flush()
         else:
             dk_player.roster_status = row.roster_status
+            # Backfills real draftable IDs on a rebuild/recapture for a
+            # slate first captured before this field existed, and keeps
+            # them current since DK's draftableId is tied to live contest
+            # state, not guaranteed stable across recaptures.
+            dk_player.dk_draftable_id = row.dk_draftable_id
+            dk_player.dk_captain_draftable_id = row.dk_captain_draftable_id
 
         db.add(DraftKingsSalary(dk_player_id_fk=dk_player.id, salary=row.salary))
         dk_player_rows.append(dk_player)

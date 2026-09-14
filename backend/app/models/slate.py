@@ -50,7 +50,16 @@ class DraftKingsPlayer(Base, UUIDPk, TimestampMixin):
 
     slate_id: Mapped[str] = mapped_column(ForeignKey("slates.id"), index=True)
     player_id: Mapped[str | None] = mapped_column(ForeignKey("players.id"), nullable=True, index=True)
-    dk_player_id: Mapped[str] = mapped_column(String(32), index=True)
+    dk_player_id: Mapped[str] = mapped_column(String(32), index=True)  # DK's stable cross-slate person ID ("playerDkId") — internal matching only
+    # DK's real per-slate, per-roster-slot upload ID ("draftableId") — what
+    # a re-export back to DK (bulk-upload CSV) must use instead of
+    # dk_player_id above. Nullable since older captures predate this field
+    # and CSV-imported slates may not carry one. dk_captain_draftable_id is
+    # Showdown-only: DK assigns a genuinely different draftableId to the
+    # same player's CPT slot vs FLEX slot (confirmed live, real DK upload
+    # template 2026-09-14) — see data_sources/draftkings.py.
+    dk_draftable_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    dk_captain_draftable_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     display_name: Mapped[str] = mapped_column(String(128))
     dk_position: Mapped[str] = mapped_column(String(8))
     team_abbreviation: Mapped[str] = mapped_column(String(8))
