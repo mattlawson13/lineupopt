@@ -247,4 +247,18 @@ export const api = {
       results: { slate_id: string; name: string; status: string; detail?: string }[];
     };
   },
+
+  captureAllOpenSlates: async () => {
+    const res = await fetch(`${API_BASE}/api/slates/capture_all_open`, { method: "POST" });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body?.detail || `HTTP ${res.status}`);
+    return body as {
+      open_draft_groups: number;
+      already_captured: number;
+      newly_captured: number;
+      skipped: number;
+      errors: number;
+      results: { dk_draft_group_id: string; status: string; detail?: string; slate_id?: string; teams?: number; games?: number; players?: number }[];
+    };
+  },
 };

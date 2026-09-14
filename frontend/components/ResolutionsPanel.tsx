@@ -14,6 +14,11 @@ export default function ResolutionsPanel({ slateId }: { slateId: string }) {
     null
   );
   const [resolveAllError, setResolveAllError] = useState<string | null>(null);
+  const [capturing, setCapturing] = useState(false);
+  const [captureResult, setCaptureResult] = useState<Awaited<ReturnType<typeof api.captureAllOpenSlates>> | null>(
+    null
+  );
+  const [captureError, setCaptureError] = useState<string | null>(null);
 
   const loadPatterns = () => {
     setPatternsLoading(true);
@@ -41,6 +46,20 @@ export default function ResolutionsPanel({ slateId }: { slateId: string }) {
     }
   };
 
+  const handleCapture = async () => {
+    setCapturing(true);
+    setCaptureError(null);
+    setCaptureResult(null);
+    try {
+      const result = await api.captureAllOpenSlates();
+      setCaptureResult(result);
+    } catch (e: any) {
+      setCaptureError(e?.message || String(e));
+    } finally {
+      setCapturing(false);
+    }
+  };
+
   const handleResolveAll = async () => {
     setResolvingAll(true);
     setResolveAllError(null);
@@ -58,6 +77,49 @@ export default function ResolutionsPanel({ slateId }: { slateId: string }) {
 
   return (
     <div className="space-y-5">
+      <div className="rounded-lg border border-surface-border bg-surface-raised p-5">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold tracking-tight">Capture Open Slates</h2>
+          <button
+            onClick={handleCapture}
+            disabled={capturing}
+            className="rounded border border-surface-border bg-surface px-4 py-2 text-sm font-medium text-slate-300 transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {capturing ? "Capturing…" : "Capture Now"}
+          </button>
+        </div>
+        <p className="mb-3 text-xs text-slate-500">
+          Saves real player/salary/game data for every DK slate currently open for entry that this app hasn&apos;t
+          already captured — DraftKings zeroes out salary data once a slate locks, so this has to happen before
+          then. Runs automatically every 15 minutes; use this to capture on demand too. Captured slates stay
+          available to resolve below even after DraftKings stops listing them.
+        </p>
+        {captureError && (
+          <div className="rounded border border-danger/40 bg-danger/10 p-3 text-sm text-danger">{captureError}</div>
+        )}
+        {captureResult && (
+          <div className="space-y-2">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <Stat label="Open Slates" value={String(captureResult.open_draft_groups)} />
+              <Stat label="Newly Captured" value={String(captureResult.newly_captured)} />
+              <Stat label="Already Had" value={String(captureResult.already_captured)} />
+              <Stat label="Skipped/Errors" value={String(captureResult.skipped + captureResult.errors)} />
+            </div>
+            {captureResult.results.length > 0 && (
+              <ul className="space-y-1 text-xs text-slate-400">
+                {captureResult.results.map((r) => (
+                  <li key={r.dk_draft_group_id}>
+                    <span className="font-medium text-slate-300">{r.dk_draft_group_id}</span>: {r.status}
+                    {r.players ? ` — ${r.players} players` : ""}
+                    {r.detail ? ` — ${r.detail}` : ""}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+      </div>
+
       <div className="rounded-lg border border-surface-border bg-surface-raised p-5">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-lg font-semibold tracking-tight">Resolve All Ingested Slates</h2>
