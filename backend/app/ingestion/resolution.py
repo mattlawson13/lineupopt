@@ -34,6 +34,7 @@ import dataclasses
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config.loader import get_optimization_settings
 from app.data_sources.base import SourceUnavailableError
 from app.data_sources.nfl_stats import NFLStatsSource
 from app.features import espn_adapter
@@ -44,13 +45,15 @@ from app.models.lineup import Lineup, LineupPlayer, OptimizationRun
 from app.models.projections import EnsembleProjection
 from app.models.slate import DraftKingsPlayer, Slate
 from app.normalization.player_matcher import normalize_name
+from app.optimization.diversification import DiversificationSettings, generate_portfolio
 from app.optimization.dk_rules import get_contest_rules
-from app.optimization.optimizer import InfeasibleLineupError, OptimizerPlayer, optimize_single_lineup
+from app.optimization.optimizer import OptimizerPlayer
 from app.optimization.stacking import classify_stack
 from app.projections.nfl.dk_points import compute_dk_points
 from app.projections.nfl.dst import _stat_line as dst_stat_line
 
 UNRESOLVABLE_POSITIONS = {"K"}  # see module docstring
+RETRO_OPTIMAL_PORTFOLIO_SIZE = 5  # user: "top 5 lineups... by what would've been optimal"
 
 
 class ResolutionUnavailableError(RuntimeError):
@@ -60,9 +63,10 @@ class ResolutionUnavailableError(RuntimeError):
 @dataclasses.dataclass
 class ResolutionSummary:
     slate_resolution_id: str
-    our_best_actual_points: float
+    our_best_actual_points: float | None
     retro_optimal_points: float
     retro_optimal_lineup_id: str | None
+    retro_optimal_run_id: str | None
     players_resolved: int
     mae: float
     bias: float
@@ -74,14 +78,19 @@ def resolve_slate(db: Session, slate_id: str, optimization_run_id: str | None = 
     if not slate:
         raise ValueError(f"Slate {slate_id} not found")
 
+    # Optional — grading "our" lineups against the retro-optimal portfolio
+    # is useful context when we have it, but not a prerequisite: the
+    # retro-optimal computation below is built entirely from real stats
+    # and real salaries, independent of whether this slate ever had
+    # lineups generated for it.
     run = (
         db.get(OptimizationRun, optimization_run_id) if optimization_run_id
         else db.execute(
-            select(OptimizationRun).where(OptimizationRun.slate_id == slate_id).order_by(OptimizationRun.completed_at.desc())
+            select(OptimizationRun)
+            .where(OptimizationRun.slate_id == slate_id, OptimizationRun.objective != "retro_optimal")
+            .order_by(OptimizationRun.completed_at.desc())
         ).scalars().first()
     )
-    if not run:
-        raise ValueError(f"No optimization run found for slate {slate_id}")
 
     actual_by_norm_name: dict[str, dict] = {}
     try:
@@ -190,65 +199,82 @@ def resolve_slate(db: Session, slate_id: str, optimization_run_id: str | None = 
     rules = get_contest_rules("nfl", slate.contest_type)
     slot_score_mult = {s.name: s.score_multiplier for s in rules.slots}
 
+    optimizer_players = [
+        OptimizerPlayer(
+            player_id=row.player_id, position=row.dk_position, team=row.team_abbreviation,
+            game_id=row.game_id, salary=row.salaries[-1].salary if row.salaries else 0,
+            objective_value=actual_points_by_player_id.get(row.player_id, 0.0),
+        )
+        for row in dk_rows if row.player_id and row.game_id
+    ]
+    players_by_id = {p.player_id: p for p in optimizer_players}
+
+    # A portfolio of several genuinely different high-real-score lineups,
+    # not just the single best one — the whole point of mining these for
+    # roster-construction patterns (GET /api/resolutions/patterns: stack
+    # shape, salary usage) needs more than n=1 data point per slate to be
+    # useful once aggregated. Same diversification machinery a normal
+    # build already uses, just fed real points instead of projections.
+    # The first lineup is unconstrained by exposure/overlap (nothing
+    # generated yet), so it's still exactly "the single best obtainable
+    # lineup" — retro_optimal_points below is unchanged in meaning from
+    # when this only computed one.
+    opt_cfg = get_optimization_settings()
+    diversification = DiversificationSettings(**opt_cfg["default_diversification"])
+    portfolio = generate_portfolio(optimizer_players, rules, RETRO_OPTIMAL_PORTFOLIO_SIZE, diversification)
+
     retro_optimal_lineup_id = None
+    retro_optimal_run_id = None
     retro_optimal_points = 0.0
-    try:
-        optimizer_players = [
-            OptimizerPlayer(
-                player_id=row.player_id, position=row.dk_position, team=row.team_abbreviation,
-                game_id=row.game_id, salary=row.salaries[-1].salary if row.salaries else 0,
-                objective_value=actual_points_by_player_id.get(row.player_id, 0.0),
-            )
-            for row in dk_rows if row.player_id and row.game_id
-        ]
-        retro = optimize_single_lineup(optimizer_players, rules)
-        retro_optimal_points = retro.objective_total
-
-        # Classified and stored (not just described) so retro-optimal
-        # builds can be aggregated across slates later — see
-        # GET /api/resolutions/patterns — to answer "what does a winning
-        # roster actually look like" (stack shape, salary usage) from our
-        # own real, resolved slates instead of needing external data.
-        players_by_id = {p.player_id: p for p in optimizer_players}
-        stack = classify_stack(retro.assignments, players_by_id)
-
+    if portfolio.lineups:
+        retro_optimal_points = portfolio.lineups[0].objective_total
         retro_run = OptimizationRun(
-            slate_id=slate_id, objective="retro_optimal", num_lineups_requested=1, num_lineups_generated=1,
-            status="completed", settings={"note": "best possible lineup with perfect hindsight (actual DK points)"},
+            slate_id=slate_id, objective="retro_optimal", num_lineups_requested=RETRO_OPTIMAL_PORTFOLIO_SIZE,
+            num_lineups_generated=len(portfolio.lineups), status="completed",
+            settings={"note": "best possible lineups with perfect hindsight (actual DK points)"},
         )
         db.add(retro_run)
         db.flush()
-        retro_lineup = Lineup(
-            optimization_run_id=retro_run.id, slate_id=slate_id, salary_used=retro.salary_used,
-            salary_remaining=rules.salary_cap - retro.salary_used,
-            projected_points=retro.objective_total, ceiling=retro.objective_total, floor=retro.objective_total,
-            stack_type=stack.stack_type.value if stack.stack_type else None,
-            stack_description=f"Retro-optimal: best lineup obtainable with perfect hindsight. {stack.description}",
-        )
-        db.add(retro_lineup)
-        db.flush()
-        for a in retro.assignments:
-            db.add(LineupPlayer(lineup_id=retro_lineup.id, player_id=a.player_id, roster_slot=a.slot, salary=a.salary, projected_points=a.objective_value))
-        retro_optimal_lineup_id = retro_lineup.id
-    except InfeasibleLineupError:
-        pass  # not enough resolved players to fill a legal roster (e.g. mid-week resolution) — leave unset
+        for retro in portfolio.lineups:
+            # Classified and stored (not just described) so these can be
+            # aggregated across slates — see GET /api/resolutions/patterns
+            # — to answer "what does a winning roster actually look like"
+            # from our own real, resolved slates.
+            stack = classify_stack(retro.assignments, players_by_id)
+            retro_lineup = Lineup(
+                optimization_run_id=retro_run.id, slate_id=slate_id, salary_used=retro.salary_used,
+                salary_remaining=rules.salary_cap - retro.salary_used,
+                projected_points=retro.objective_total, ceiling=retro.objective_total, floor=retro.objective_total,
+                stack_type=stack.stack_type.value if stack.stack_type else None,
+                stack_description=f"Retro-optimal: best obtainable with perfect hindsight. {stack.description}",
+            )
+            db.add(retro_lineup)
+            db.flush()
+            for a in retro.assignments:
+                db.add(LineupPlayer(lineup_id=retro_lineup.id, player_id=a.player_id, roster_slot=a.slot, salary=a.salary, projected_points=a.objective_value))
+            if retro_optimal_lineup_id is None:  # portfolio.lineups[0] is the unconstrained best
+                retro_optimal_lineup_id = retro_lineup.id
+        retro_optimal_run_id = retro_run.id
 
-    our_best = db.execute(
-        select(Lineup).where(Lineup.optimization_run_id == run.id).order_by(Lineup.ai_rank)
-    ).scalars().first()
-    our_best_actual_points = 0.0
-    if our_best:
-        for lp in our_best.players:
-            mult = slot_score_mult.get(lp.roster_slot, 1.0)
-            our_best_actual_points += actual_points_by_player_id.get(lp.player_id, 0.0) * mult
-        our_best_actual_points = round(our_best_actual_points, 2)
+    our_best_actual_points = None
+    if run:
+        our_best = db.execute(
+            select(Lineup).where(Lineup.optimization_run_id == run.id).order_by(Lineup.ai_rank)
+        ).scalars().first()
+        if our_best:
+            our_best_actual_points = 0.0
+            for lp in our_best.players:
+                mult = slot_score_mult.get(lp.roster_slot, 1.0)
+                our_best_actual_points += actual_points_by_player_id.get(lp.player_id, 0.0) * mult
+            our_best_actual_points = round(our_best_actual_points, 2)
 
     biggest_misses.sort(key=lambda m: abs(m["error"]), reverse=True)
     mae = round(sum(abs(e) for e in errors) / len(errors), 2) if errors else 0.0
     bias = round(sum(errors) / len(errors), 2) if errors else 0.0
 
     resolution = SlateResolution(
-        slate_id=slate_id, optimization_run_id=run.id, retro_optimal_lineup_id=retro_optimal_lineup_id,
+        slate_id=slate_id, optimization_run_id=run.id if run else None,
+        retro_optimal_run_id=retro_optimal_run_id, retro_optimal_lineup_id=retro_optimal_lineup_id,
         our_best_actual_points=our_best_actual_points, retro_optimal_points=round(retro_optimal_points, 2),
         players_resolved=resolved_count, players_unmatched=0, mae=mae, bias=bias,
         summary={"biggest_misses": biggest_misses[:10]},
@@ -259,5 +285,6 @@ def resolve_slate(db: Session, slate_id: str, optimization_run_id: str | None = 
     return ResolutionSummary(
         slate_resolution_id=resolution.id, our_best_actual_points=our_best_actual_points,
         retro_optimal_points=round(retro_optimal_points, 2), retro_optimal_lineup_id=retro_optimal_lineup_id,
+        retro_optimal_run_id=retro_optimal_run_id,
         players_resolved=resolved_count, mae=mae, bias=bias, biggest_misses=biggest_misses[:10],
     )

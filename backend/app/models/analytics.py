@@ -100,20 +100,27 @@ class PlayerActualResult(Base, UUIDPk, TimestampMixin):
 
 class SlateResolution(Base, UUIDPk, TimestampMixin):
     """One resolution pass for a slate: how our generated lineups actually
-    would have scored, versus the best lineup obtainable in hindsight
-    (same optimizer, run against real results instead of projections).
-    The retro-optimal lineup itself is stored as an ordinary Lineup row
-    (via its own OptimizationRun with objective="retro_optimal"), linked
-    here by id, so it reuses every existing lineup-serialization path.
+    would have scored (if we'd built any — optional, see resolution.py),
+    versus a portfolio of the best lineups obtainable in hindsight (same
+    optimizer/diversification logic as a normal build, run against real
+    results instead of projections). Those retro-optimal lineups are
+    stored as ordinary Lineup rows under retro_optimal_run_id (via its
+    own OptimizationRun with objective="retro_optimal"), so they reuse
+    every existing lineup-serialization path; retro_optimal_lineup_id
+    points at the single highest-scoring one of that set for convenience.
     """
 
     __tablename__ = "slate_resolutions"
 
     slate_id: Mapped[str] = mapped_column(ForeignKey("slates.id"), index=True)
-    optimization_run_id: Mapped[str] = mapped_column(ForeignKey("optimization_runs.id"), index=True)  # the run being graded
+    # Nullable: resolving no longer requires you to have already built
+    # lineups for this slate — grading "our" lineups is optional context,
+    # not a prerequisite for computing the real retro-optimal portfolio.
+    optimization_run_id: Mapped[str | None] = mapped_column(ForeignKey("optimization_runs.id"), nullable=True, index=True)
+    retro_optimal_run_id: Mapped[str | None] = mapped_column(ForeignKey("optimization_runs.id"), nullable=True)
     retro_optimal_lineup_id: Mapped[str | None] = mapped_column(ForeignKey("lineups.id"), nullable=True)
 
-    our_best_actual_points: Mapped[float] = mapped_column(Float)  # our #1-ranked lineup's real score
+    our_best_actual_points: Mapped[float | None] = mapped_column(Float, nullable=True)  # our #1-ranked lineup's real score, if we had one
     retro_optimal_points: Mapped[float] = mapped_column(Float)
     players_resolved: Mapped[int] = mapped_column(Integer, default=0)
     players_unmatched: Mapped[int] = mapped_column(Integer, default=0)
