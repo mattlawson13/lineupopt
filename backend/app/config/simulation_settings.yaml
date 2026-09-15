@@ -34,3 +34,21 @@ player_variance:
 
 percentiles: [10, 25, 50, 75, 90, 95, 99]
 salary_multiplier_targets: [3, 4, 5, 6]
+
+# Contest-field simulation (simulation/field_sim.py) — scores a portfolio's
+# lineups against a synthetic modeled field instead of the crude
+# `prob_top5pct% - ownership%` proxy. Two honest approximations, not
+# hidden: the field is built from OUR OWN ownership model, not real
+# observed contest entries (DK doesn't expose those); and the payout
+# curve is a top-heavy shape calibrated to a contest's REAL prize pool/
+# entry count/entry fee when a specific dk_contest_id is known (from
+# DraftKings' own lobby listing — data_sources/draftkings.py's
+# get_nfl_contests, which does expose total_prizes/max_entries/entry_fee),
+# or a generic assumed shape otherwise.
+field_simulation:
+  num_field_lineups: 1000     # synthetic opponent entries sampled per build
+  max_sims_used: 2000         # subsamples the Monte Carlo draw matrix's simulation columns for cost control on a free-tier host
+  cash_line_pct: 0.20         # fraction of the field assumed to cash — real DK cash lines vary by contest and aren't exposed via any known endpoint
+  payout_shape_alpha: 2.5     # higher = payout concentrates more toward 1st place (typical large-field GPP shape)
+  assumed_rake_pct: 0.15      # used only when a contest's real total_prizes isn't available (no dk_contest_id selected)
+  min_ownership_weight_pct: 0.5  # floor so a player with no ownership projection isn't literally unpickable by the synthetic field

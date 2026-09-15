@@ -203,6 +203,23 @@ export default function LineupsPanel({ lineups, slateId }: { lineups: Lineup[]; 
             <Stat label="Uniq" value={lu.uniqueness_score?.toFixed(1) ?? "—"} />
           </div>
 
+          {lu.sim_payout_basis && (
+            <div className="mb-3">
+              <div className="grid grid-cols-4 gap-2 text-center text-xs">
+                <Stat label="Win%" value={lu.sim_win_pct?.toFixed(2) ?? "—"} />
+                <Stat label="Top1%" value={lu.sim_top1pct_pct?.toFixed(1) ?? "—"} />
+                <Stat label="Cash%" value={lu.sim_cash_pct?.toFixed(1) ?? "—"} />
+                <Stat
+                  label="ROI"
+                  value={lu.sim_roi_pct !== null ? `${lu.sim_roi_pct > 0 ? "+" : ""}${lu.sim_roi_pct.toFixed(0)}%` : "—"}
+                />
+              </div>
+              <div className="mt-1 text-center text-[10px] text-slate-600">
+                vs. a {lu.sim_payout_basis === "contest_real" ? "field simulated for this contest’s real payouts" : "generically-modeled field — not this specific contest’s real payout table"}
+              </div>
+            </div>
+          )}
+
           <div className="mb-3 rounded border border-surface-border bg-surface p-2.5 text-xs leading-relaxed text-slate-300">
             <span className="font-semibold text-slate-400">WHY THIS LINEUP? </span>
             {lu.explanation}

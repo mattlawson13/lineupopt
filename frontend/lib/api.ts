@@ -117,6 +117,16 @@ export interface Lineup {
   ai_rank: number | null;
   ai_score: number | null;
   explanation: string | null;
+  // Contest-field simulation (backend: simulation/field_sim.py) — null
+  // unless the build ran it. sim_payout_basis is "contest_real" when
+  // sim_roi_pct is calibrated to the selected contest's real prize pool,
+  // or "approximate_generic" when it's a generic assumed shape — never
+  // treat sim_roi_pct as a literal guaranteed dollar figure.
+  sim_win_pct: number | null;
+  sim_top1pct_pct: number | null;
+  sim_cash_pct: number | null;
+  sim_roi_pct: number | null;
+  sim_payout_basis: "contest_real" | "approximate_generic" | null;
   players: LineupPlayerRow[];
 }
 

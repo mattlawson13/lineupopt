@@ -62,6 +62,18 @@ class Lineup(Base, UUIDPk, TimestampMixin):
     ai_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     explanation: Mapped[str | None] = mapped_column(String(2048), nullable=True)  # "Why this lineup?" panel text
 
+    # Contest-field simulation metrics (simulation/field_sim.py) — this
+    # lineup's real modeled equity against a synthetic field of opponent
+    # entries, instead of blind trust in projected_points/ceiling alone.
+    # Nullable: only populated for builds that ran field simulation (needs
+    # sim.player_draws, so cash-mode/no-sim builds leave these null rather
+    # than a misleading 0).
+    sim_win_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sim_top1pct_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sim_cash_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sim_roi_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sim_payout_basis: Mapped[str | None] = mapped_column(String(32), nullable=True)  # "contest_real" | "approximate_generic"
+
     optimization_run: Mapped[OptimizationRun] = relationship(back_populates="lineups")
     players: Mapped[list["LineupPlayer"]] = relationship(back_populates="lineup")
 

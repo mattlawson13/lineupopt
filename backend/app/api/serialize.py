@@ -72,6 +72,15 @@ def serialize_lineup(lineup, players_by_id) -> dict:
         "stack_type": lineup.stack_type, "stack_description": lineup.stack_description,
         "uniqueness_score": lineup.uniqueness_score, "ai_rank": lineup.ai_rank, "ai_score": lineup.ai_score,
         "explanation": lineup.explanation,
+        # Contest-field simulation (simulation/field_sim.py) — null unless
+        # the build ran field simulation (see Lineup.sim_win_pct's model
+        # comment). sim_payout_basis tells the frontend whether sim_roi_pct
+        # is calibrated to this contest's real prize pool ("contest_real")
+        # or a generic assumed shape ("approximate_generic") so it's never
+        # displayed as if it were a guaranteed real-money number.
+        "sim_win_pct": lineup.sim_win_pct, "sim_top1pct_pct": lineup.sim_top1pct_pct,
+        "sim_cash_pct": lineup.sim_cash_pct, "sim_roi_pct": lineup.sim_roi_pct,
+        "sim_payout_basis": lineup.sim_payout_basis,
         "players": [
             {
                 "player_id": lp.player_id, "name": players_by_id.get(lp.player_id, {}).get("name", ""),

@@ -52,6 +52,7 @@ from app.projections.nfl.common import PlayerProjectionContext
 from app.projections.nfl.model import project_player
 from app.projections.why_panel import build_why_panel
 from app.simulation.game_sim import GameSimInput
+from app.simulation.field_sim import FieldSimSettings, simulate_field
 from app.simulation.monte_carlo import PlayerSimInput, simulate_slate
 from app.sports.nfl.stadiums import DOME_TEAMS, TEAM_STADIUM_COORDS
 
@@ -1136,6 +1137,27 @@ def _resolve_contest_calibration(objective: str, dk_contest_id: str | None) -> t
     return weights, note
 
 
+def _resolve_contest_payout_details(dk_contest_id: str | None) -> tuple[float | None, float | None, int | None]:
+    """(total_prizes, entry_fee, max_entries) for a specific DK contest —
+    DK's own lobby listing exposes these real numbers (data_sources/
+    draftkings.py's get_nfl_contests) — used to calibrate
+    simulation/field_sim.py's payout curve to real money instead of a
+    generic assumed shape. Best-effort, same policy as
+    _resolve_contest_calibration: any failure just means no calibration,
+    never a build failure.
+    """
+    if not dk_contest_id:
+        return None, None, None
+    try:
+        contests = DraftKingsApiSource().get_nfl_contests().data
+    except SourceUnavailableError:
+        return None, None, None
+    contest = next((c for c in contests if c.dk_contest_id == dk_contest_id), None)
+    if not contest:
+        return None, None, None
+    return contest.total_prizes, contest.entry_fee, contest.max_entries
+
+
 def _optimize_lineups(db, slate, dk_player_rows, ensemble_by_player_id, ownership_by_player_id, sim_result, sim_run, options: BuildOptions, game_env_by_game_id: dict | None = None, correlation_entries=None):
     from app.config.loader import get_optimization_settings
 
@@ -1267,8 +1289,38 @@ def _optimize_lineups(db, slate, dk_player_rows, ensemble_by_player_id, ownershi
         min_salary_used=min_salary_used,
     )
 
+    # Contest-field simulation (simulation/field_sim.py) — scores the whole
+    # portfolio against a modeled field of opponent entries using the SAME
+    # per-simulation player draws the Monte Carlo engine already produced,
+    # instead of trusting projected_points/ceiling alone. Real Stokastic/
+    # SaberSim-style contest-equity metrics (win%/top1%/cash%/ROI), not a
+    # linear proxy. Best-effort: sim_result.player_draws is only empty if
+    # simulation genuinely produced nothing, in which case field_sim
+    # itself reports "unavailable" rather than raising.
+    from app.config.loader import get_simulation_settings
+
+    field_cfg = get_simulation_settings().get("field_simulation", {})
+    total_prizes, entry_fee, max_entries = _resolve_contest_payout_details(options.dk_contest_id)
+    ownership_pct_by_pid = {
+        pid: own.projected_ownership_pct for pid, own in ownership_by_player_id.items()
+        if own and own.projected_ownership_pct is not None
+    }
+    field_results = simulate_field(
+        portfolio.lineups, optimizer_players, ownership_pct_by_pid, rules, sim_result.player_draws,
+        settings=FieldSimSettings(
+            num_field_lineups=field_cfg.get("num_field_lineups", 1000),
+            max_sims_used=field_cfg.get("max_sims_used", 2000),
+            cash_line_pct=field_cfg.get("cash_line_pct", 0.20),
+            payout_shape_alpha=field_cfg.get("payout_shape_alpha", 2.5),
+            assumed_rake_pct=field_cfg.get("assumed_rake_pct", 0.15),
+            min_ownership_weight_pct=field_cfg.get("min_ownership_weight_pct", 0.5),
+            seed=options.seed,
+        ),
+        total_prizes=total_prizes, entry_fee=entry_fee, max_entries=max_entries,
+    )
+
     lineups = []
-    for lu in portfolio.lineups:
+    for lu, field_result in zip(portfolio.lineups, field_results):
         stack = classify_stack(lu.assignments, players_by_id)
         ens_projs = [ensemble_by_player_id[a.player_id]["ensemble"] for a in lu.assignments]
         lineup = Lineup(
@@ -1280,6 +1332,12 @@ def _optimize_lineups(db, slate, dk_player_rows, ensemble_by_player_id, ownershi
             stack_type=stack.stack_type.value if stack.stack_type else None,
             stack_description=stack.description,
         )
+        if field_result.payout_basis != "unavailable":
+            lineup.sim_win_pct = field_result.win_pct
+            lineup.sim_top1pct_pct = field_result.top1pct_pct
+            lineup.sim_cash_pct = field_result.cash_pct
+            lineup.sim_roi_pct = field_result.roi_pct
+            lineup.sim_payout_basis = field_result.payout_basis
         db.add(lineup)
         db.flush()
         for a in lu.assignments:
