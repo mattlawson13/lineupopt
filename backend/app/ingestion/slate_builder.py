@@ -1240,10 +1240,60 @@ def _optimize_lineups(db, slate, dk_player_rows, ensemble_by_player_id, ownershi
                 )
         stack_teams = [t for t, _ in sorted(team_totals.items(), key=lambda kv: kv[1], reverse=True)] or None
 
+    # Showdown GPP: guarantee real coverage of the "smash spot" captain —
+    # the lead back on the team favored to win, whose volume (and
+    # therefore fantasy upside) tends to climb as a favorable game script
+    # develops (extra carries to run out a lead). This is a well-known,
+    # real GPP pattern that the raw objective doesn't reliably surface on
+    # its own: it competes against every other player purely on pre-game
+    # projection, and a similarly-projected QB with a nominally higher
+    # number can out-rank it in the linear objective even though the RB
+    # is the real high-ceiling bet if the game breaks the expected way.
+    # Confirmed live: a real portfolio captained exactly this profile in
+    # just 1 of 17 lineups, and it went on to have the best real game on
+    # the slate (23 carries, 173 yards, 2 total TDs) while the
+    # higher-projected QB busted — the portfolio had almost no exposure
+    # to the outcome that actually happened. At least 10% of the
+    # portfolio (minimum 2) is now reserved for this captain outright
+    # rather than left to the objective to maybe find.
+    forced_captain_ids: list[str] | None = None
+    if slate.contest_type == "showdown" and weights.get("correlation", 0) > 0 and game_env_by_game_id:
+        favored_team = None
+        best_edge = float("-inf")
+        for r in dk_player_rows:
+            if r.dk_position != "QB" or not r.game_id:
+                continue
+            info = ensemble_by_player_id.get(r.player_id)
+            if not info:
+                continue
+            env = info["env"]
+            own_total = env.get("home_implied_total" if info["is_home"] else "away_implied_total", 22.0)
+            opp_total = env.get("away_implied_total" if info["is_home"] else "home_implied_total", 22.0)
+            edge = own_total - opp_total
+            if edge > best_edge:
+                best_edge = edge
+                favored_team = r.team_abbreviation
+
+        if favored_team:
+            eligible_player_ids = {p.player_id for p in optimizer_players}
+            lead_back = max(
+                (
+                    r for r in dk_player_rows
+                    if r.dk_position == "RB" and r.team_abbreviation == favored_team
+                    and r.player_id in ensemble_by_player_id and r.player_id in eligible_player_ids
+                ),
+                key=lambda r: ensemble_by_player_id[r.player_id]["ensemble"].ensemble_projection,
+                default=None,
+            )
+            if lead_back:
+                guaranteed_count = min(options.num_lineups, max(2, round(options.num_lineups * 0.10)))
+                forced_captain_ids = [lead_back.player_id] * guaranteed_count
+
     min_salary_used = round(rules.salary_cap * mode_cfg.get("min_salary_pct", 0.0)) or None
     portfolio = generate_portfolio(
         optimizer_players, rules, options.num_lineups, diversification,
         forced_qb_stack_teams=stack_teams,
+        forced_captain_player_ids=forced_captain_ids,
         randomness_pct=mode_cfg.get("randomness_pct", 0.0), seed=options.seed,
         min_salary_used=min_salary_used,
     )

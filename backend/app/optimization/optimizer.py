@@ -58,6 +58,7 @@ def optimize_single_lineup(
     rules: ContestRules,
     forced_team_min_counts: dict[str, int] | None = None,
     forced_qb_stack_team: str | None = None,
+    forced_captain_player_id: str | None = None,
     exclude_lineups: list[set[str]] | None = None,
     max_overlap: int | None = None,
     min_salary_used: int | None = None,
@@ -72,6 +73,11 @@ def optimize_single_lineup(
     teammate — i.e. a genuine QB+pass-catcher stack (spec section 16),
     rather than leaving stacking to emerge (or not) from the objective
     alone, which tends to under-select correlation in a linear ILP.
+
+    `forced_captain_player_id`, when set, requires DK Showdown's CPT slot
+    specifically be filled by that player — see diversification.py's
+    smash-spot captain guarantee for why this can't just be left to the
+    objective function either.
     """
     pool = [p for p in players if not p.excluded]
     if not pool:
@@ -152,6 +158,12 @@ def optimize_single_lineup(
             ]
             if catcher_vars_from_team:
                 prob += pulp.lpSum(catcher_vars_from_team) >= 1
+
+    # Forced captain: DK Showdown's CPT slot must be this specific player.
+    if forced_captain_player_id:
+        cpt_var = x.get((forced_captain_player_id, "CPT"))
+        if cpt_var is not None:
+            prob += cpt_var == 1
 
     # Team stacking: at least N players from a given team
     for team, min_count in (forced_team_min_counts or {}).items():
