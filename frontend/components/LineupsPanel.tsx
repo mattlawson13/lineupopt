@@ -215,7 +215,9 @@ export default function LineupsPanel({ lineups, slateId }: { lineups: Lineup[]; 
                 />
               </div>
               <div className="mt-1 text-center text-[10px] text-slate-600">
-                vs. a {lu.sim_payout_basis === "contest_real" ? "field simulated for this contest’s real payouts" : "generically-modeled field — not this specific contest’s real payout table"}
+                vs. a synthetic modeled field ({lu.sim_payout_basis === "contest_real" ? "this contest’s real prize pool" : "a generic assumed prize pool"}) —
+                a fast approximation, likely weaker than a real field where many entrants also optimize. Best used to
+                compare YOUR lineups against each other, not as a real win-probability forecast.
               </div>
             </div>
           )}
