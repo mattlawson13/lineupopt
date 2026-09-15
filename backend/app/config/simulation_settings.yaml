@@ -46,7 +46,7 @@ salary_multiplier_targets: [3, 4, 5, 6]
 # get_nfl_contests, which does expose total_prizes/max_entries/entry_fee),
 # or a generic assumed shape otherwise.
 field_simulation:
-  num_field_lineups: 1000     # synthetic opponent entries SAMPLED per build — a statistical sample used to estimate percentile placement, NOT the assumed real contest size (see default_max_entries)
+  num_field_lineups: 3000     # synthetic opponent entries SAMPLED per build — a statistical sample used to estimate percentile placement, NOT the assumed real contest size (see default_max_entries). Bounds the finest resolvable percentile (~1-in-3,000) — win%/top1% are inherently coarser estimates than cash% for exactly this reason.
   max_sims_used: 2000         # subsamples the Monte Carlo draw matrix's simulation columns for cost control on a free-tier host
   cash_line_pct: 0.20         # fraction of the field assumed to cash — real DK cash lines vary by contest and aren't exposed via any known endpoint
   payout_shape_alpha: 2.5     # higher = payout concentrates more toward 1st place (typical large-field GPP shape)

@@ -16,22 +16,39 @@ contest-equity metrics (win%, top1%, cash%, ROI against a payout curve)
 instead of the crude `prob_top5pct% - ownership%` linear proxy that used
 to be the only leverage signal in the objective.
 
-Two honest limitations, documented rather than hidden (same policy as
+Three honest limitations, documented rather than hidden (same policy as
 optimization/contest_calibration.py and backtesting/engine.py):
 
 1. The "field" is SYNTHETIC — built from OUR OWN ownership model and a
-   greedy salary-feasible construction, not observed from a real
-   contest's actual entries (DraftKings doesn't expose those). It
-   approximates a realistic field's roster-construction tendencies, not
-   the field.
+   fast GREEDY random construction (synthesize_field, below), not
+   observed from a real contest's actual entries (DraftKings doesn't
+   expose those) and not itself a full ILP solve. It approximates a
+   realistic field's roster-construction tendencies, not the field — and
+   is very likely WEAKER on average than a real large-field GPP's actual
+   entries, many of whom also use some kind of optimizer, which this
+   quick construction does not attempt to model. That means reported
+   win%/cash%/ROI should be read as optimistic upper bounds on real
+   equity, not a calibrated real-money forecast.
 2. The payout curve is a top-heavy shape calibrated to a SPECIFIC
    contest's real total_prizes/max_entries/entry_fee when known (DK's own
    lobby listing exposes these — data_sources/draftkings.py's
    get_nfl_contests), or a generic assumed shape (config's
-   assumed_rake_pct/cash_line_pct) otherwise. Either way the exact
-   rank-by-rank payout table DK actually pays is not exposed by any known
-   endpoint, so ROI numbers are a calibrated estimate, not the literal
-   dollar amount a real entry would win.
+   assumed_rake_pct/cash_line_pct/default_max_entries) otherwise. Either
+   way the exact rank-by-rank payout table DK actually pays is not
+   exposed by any known endpoint, so ROI numbers are a calibrated
+   estimate, not the literal dollar amount a real entry would win.
+3. Percentile placement is estimated from only `num_field_lineups`
+   synthetic samples (config default 3,000), not the full assumed real
+   field size (`default_max_entries`, e.g. 10,000+) — so the finest
+   resolvable percentile is bounded by the SAMPLE size, not the
+   population size. A continuity-corrected percentile
+   ((beaten + 0.5) / (field_size + 1), never exactly 0 or 1) keeps the
+   extrapolated rank from claiming more precision than the sample
+   supports; win%/top1% are still inherently coarser, noisier estimates
+   than cash% for exactly this reason. Confirmed live: an earlier version
+   without this correction let a single lineup beat 100% of a 1,000-
+   sample field and reported that as a literal 48%-59% "win rate" — an
+   artifact of the boundary case, not a real signal.
 """
 from __future__ import annotations
 
@@ -326,7 +343,17 @@ def simulate_field(
     for lineup in candidate_lineups:
         cand_scores = _score_candidate(lineup, slot_score_mult, player_draws, n_sims)  # (n_sims,)
         beaten = (field_scores < cand_scores[None, :]).sum(axis=0)  # count of field entries this candidate outscores, per sim
-        percentile = beaten / field_size  # 1.0 = beat the entire synthetic field
+        # Continuity-corrected percentile: beating literally every one of
+        # only `field_size` synthetic samples does NOT mean "provably rank
+        # 1 of a real 10,000+ entry field" — a 1,000-lineup sample simply
+        # can't resolve finer than roughly 1-in-1,000. Without this
+        # correction, `beaten == field_size` maps straight to percentile
+        # 1.0, which the rank extrapolation below then reports as literal
+        # rank 1 — confirmed live: a real build showed a 48% "win rate,"
+        # nonsense for an actual large-field GPP. (beaten+0.5)/(field_size+1)
+        # keeps the estimate inside (0, 1) so an extrapolated rank can
+        # never be sharper than the sample size actually supports.
+        percentile = (beaten + 0.5) / (field_size + 1)
 
         est_rank = np.clip(np.round((1 - percentile) * real_field_size).astype(int), 1, real_field_size)
         payout_per_sim = np.where(est_rank <= cash_count, payouts[np.clip(est_rank, 1, cash_count) - 1], 0.0)
