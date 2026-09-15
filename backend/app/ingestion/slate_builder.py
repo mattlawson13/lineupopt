@@ -1305,6 +1305,28 @@ def _optimize_lineups(db, slate, dk_player_rows, ensemble_by_player_id, ownershi
         pid: own.projected_ownership_pct for pid, own in ownership_by_player_id.items()
         if own and own.projected_ownership_pct is not None
     }
+
+    # The field's "sharp" cohort (field_sim.py's synthesize_field) — real
+    # lineups from re-running this SAME portfolio optimizer with a
+    # different seed/higher randomness, representing entrants who also
+    # optimize rather than just chalk-follow. Without this, the synthetic
+    # field is 100% fast greedy-random sampling and gets dominated by any
+    # real ILP-optimized lineup almost every simulated world (confirmed
+    # live: a ~47% "win rate" for one lineup in an actual large-field
+    # GPP). A modest, bounded extra portfolio solve — not a per-field-
+    # lineup ILP, which would be far too slow at field scale.
+    sharp_field_lineups = []
+    sharp_pool_size = field_cfg.get("sharp_pool_size", 40)
+    if sharp_pool_size > 0:
+        sharp_seed = None if options.seed is None else options.seed ^ 0x5EED
+        sharp_portfolio = generate_portfolio(
+            optimizer_players, rules, sharp_pool_size, diversification,
+            forced_qb_stack_teams=stack_teams,
+            randomness_pct=max(mode_cfg.get("randomness_pct", 0.0), 15.0), seed=sharp_seed,
+            min_salary_used=min_salary_used,
+        )
+        sharp_field_lineups = sharp_portfolio.lineups
+
     field_results = simulate_field(
         portfolio.lineups, optimizer_players, ownership_pct_by_pid, rules, sim_result.player_draws,
         settings=FieldSimSettings(
@@ -1315,9 +1337,11 @@ def _optimize_lineups(db, slate, dk_player_rows, ensemble_by_player_id, ownershi
             assumed_rake_pct=field_cfg.get("assumed_rake_pct", 0.15),
             min_ownership_weight_pct=field_cfg.get("min_ownership_weight_pct", 0.5),
             default_max_entries=field_cfg.get("default_max_entries", 10_000),
+            sharp_fraction=field_cfg.get("sharp_fraction", 0.35),
             seed=options.seed,
         ),
         total_prizes=total_prizes, entry_fee=entry_fee, max_entries=max_entries,
+        sharp_field_lineups=sharp_field_lineups,
     )
 
     lineups = []

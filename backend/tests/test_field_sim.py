@@ -47,6 +47,21 @@ def test_synthesize_field_produces_legal_lineups():
         assert salary <= rules.salary_cap
 
 
+def test_sharp_cohort_is_blended_into_the_field():
+    pool = make_pool()
+    rules = get_contest_rules("nfl", "classic")
+    own = make_ownership(pool)
+    rng = np.random.default_rng(9)
+
+    sharp_lineup = optimize_single_lineup(pool, rules)
+    settings = FieldSimSettings(num_field_lineups=100, sharp_fraction=1.0)  # 100% sharp -> every field entry must be the sharp lineup
+    field = synthesize_field(pool, own, rules, 100, settings, rng, sharp_field_lineups=[sharp_lineup])
+    assert len(field) == 100
+    expected_ids = {a.player_id for a in sharp_lineup.assignments}
+    for lu in field:
+        assert {pid for _, pid in lu} == expected_ids
+
+
 def test_stronger_lineup_beats_weaker_lineup_more_often():
     pool = make_pool()
     rules = get_contest_rules("nfl", "classic")

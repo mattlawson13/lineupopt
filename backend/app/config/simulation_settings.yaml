@@ -53,3 +53,5 @@ field_simulation:
   assumed_rake_pct: 0.15      # used only when a contest's real total_prizes isn't available (no dk_contest_id selected)
   min_ownership_weight_pct: 0.5  # floor so a player with no ownership projection isn't literally unpickable by the synthetic field
   default_max_entries: 10000  # assumed REAL contest size when no dk_contest_id's real max_entries is known — deliberately different from num_field_lineups (confirmed live: conflating the two reported a 59% win rate / 99.8% cash rate against what a real large-field GPP would never give)
+  sharp_fraction: 0.35         # share of the synthetic field built from real re-optimized lineups ("sharp" cohort) instead of fast ownership-weighted random sampling ("casual" cohort) — an explicit assumption, not a measured DK statistic (DK doesn't publish what share of a real field optimizes)
+  sharp_pool_size: 40          # distinct lineups generated (via a second portfolio solve, different seed/higher randomness) to resample the sharp cohort from — bounded to keep this a modest, predictable extra cost, not a full second field-sized ILP run

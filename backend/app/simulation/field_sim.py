@@ -19,16 +19,25 @@ to be the only leverage signal in the objective.
 Three honest limitations, documented rather than hidden (same policy as
 optimization/contest_calibration.py and backtesting/engine.py):
 
-1. The "field" is SYNTHETIC — built from OUR OWN ownership model and a
-   fast GREEDY random construction (synthesize_field, below), not
-   observed from a real contest's actual entries (DraftKings doesn't
-   expose those) and not itself a full ILP solve. It approximates a
-   realistic field's roster-construction tendencies, not the field — and
-   is very likely WEAKER on average than a real large-field GPP's actual
-   entries, many of whom also use some kind of optimizer, which this
-   quick construction does not attempt to model. That means reported
-   win%/cash%/ROI should be read as optimistic upper bounds on real
-   equity, not a calibrated real-money forecast.
+1. The "field" is SYNTHETIC — built from OUR OWN ownership model, not
+   observed from a real contest's actual entries (no known DK endpoint
+   exposes those pre-lock — and neither Stokastic, SaberSim, nor anyone
+   outside DK has that either; this is a genuine information limit, not
+   a gap specific to this implementation). It's a MIX of two cohorts
+   (settings.sharp_fraction, default 0.35 of the field): a "sharp" cohort
+   built by actually re-running this same portfolio optimizer with a
+   different seed/randomness (representing entrants who also optimize —
+   real competition our own lineup has to beat, not a pushover), and a
+   "casual" cohort built by fast ownership-weighted greedy sampling
+   (representing entrants who chalk-follow without fully optimizing).
+   Before the sharp cohort existed, the field was 100% casual and got
+   dominated by any real ILP-optimized lineup almost every simulated
+   world — measured live: a ~47% "win rate" for a single lineup in an
+   actual large-field GPP, absurd on its face. The sharp_fraction split
+   is an explicit, config-adjustable ASSUMPTION (DK doesn't publish what
+   share of a real field optimizes), not a verified fact — treat reported
+   win%/cash%/ROI as a materially more realistic estimate, still not a
+   literal real-money guarantee.
 2. The payout curve is a top-heavy shape calibrated to a SPECIFIC
    contest's real total_prizes/max_entries/entry_fee when known (DK's own
    lobby listing exposes these — data_sources/draftkings.py's
@@ -78,6 +87,11 @@ class FieldSimSettings:
     # the actual contest size. 10,000 is a generic mid-large-GPP
     # assumption, not a guess at any specific contest.
     default_max_entries: int = 10_000
+    # Fraction of the synthetic field built from the "sharp" cohort (real
+    # re-optimized lineups) rather than the fast ownership-weighted
+    # "casual" greedy cohort — see the module docstring's limitation #1.
+    # An explicit, adjustable assumption, not a measured DK statistic.
+    sharp_fraction: float = 0.35
     seed: int | None = None
 
 
@@ -141,6 +155,10 @@ def _candidate_base_by_slot(pool: list, slot_instances: list[tuple[str, list[str
     return base
 
 
+def _lineup_result_to_pairs(lineup: LineupResult) -> list[tuple[str, str]]:
+    return [(a.slot, a.player_id) for a in lineup.assignments]
+
+
 def synthesize_field(
     pool: list,
     ownership_by_pid: dict[str, float],
@@ -148,24 +166,42 @@ def synthesize_field(
     num_lineups: int,
     settings: FieldSimSettings,
     rng: np.random.Generator,
+    sharp_field_lineups: list[LineupResult] | None = None,
 ) -> list[list[tuple[str, str]]]:
-    """Greedy, ownership-weighted random roster construction — NOT a full
-    ILP solve per field lineup (would be far too slow for a field of
-    hundreds/thousands). Approximates how a real field distributes across
-    players: popular (chalk) players get rostered far more often, exactly
-    like real human/lobby-tool-built lineups skew toward consensus plays,
+    """Builds the synthetic field as a MIX of two cohorts (see module
+    docstring's limitation #1): a "sharp" cohort resampled (with
+    replacement) from `sharp_field_lineups` — real lineups from re-running
+    this same portfolio optimizer, representing entrants who also
+    optimize — and a "casual" cohort built by greedy, ownership-weighted
+    random roster construction (NOT a full ILP solve — would be far too
+    slow for a field of hundreds/thousands), representing entrants who
+    chalk-follow without fully optimizing. `settings.sharp_fraction`
+    controls the split; pass `sharp_field_lineups=None` (or an empty list)
+    for an all-casual field.
+
+    The casual construction approximates how a real field distributes
+    across players: popular (chalk) players get rostered far more often,
     while still respecting DK's hard salary cap, position eligibility,
     max-players-per-team, and min-teams-represented rules.
 
     Returns a list of [(slot_name, player_id), ...] per field lineup — a
     list, not a dict, because a slot name like "RB" or "WR" legitimately
     repeats (DK's per-slot count > 1); keying by slot name would silently
-    drop every repeat but the last. A lineup that can't be completed under
-    the retry budget falls back to the cheapest eligible player for its
-    remaining slots — guaranteed feasible since the real optimizer already
-    built legal lineups from this same pool, so a min-cost roster is
-    always obtainable.
+    drop every repeat but the last. A casual lineup that can't be
+    completed under the retry budget falls back to the cheapest eligible
+    player for its remaining slots — guaranteed feasible since the real
+    optimizer already built legal lineups from this same pool, so a
+    min-cost roster is always obtainable.
     """
+    sharp_count = 0
+    sharp_lineups: list[list[tuple[str, str]]] = []
+    if sharp_field_lineups and settings.sharp_fraction > 0:
+        sharp_count = min(num_lineups, round(num_lineups * settings.sharp_fraction))
+        pairs_pool = [_lineup_result_to_pairs(lu) for lu in sharp_field_lineups]
+        idx = rng.integers(0, len(pairs_pool), size=sharp_count)
+        sharp_lineups = [pairs_pool[i] for i in idx]
+
+    casual_count = num_lineups - sharp_count
     slot_instances = _expand_slots(rules)
     floor_weight = settings.min_ownership_weight_pct
     cheapest_lookup = _cheapest_salary_lookup(pool, slot_instances)
@@ -179,7 +215,7 @@ def synthesize_field(
         remaining_cost_by_index[i] = remaining_cost_by_index[i + 1] + cheapest_lookup[tuple(sorted(elig))] * mult
 
     lineups: list[list[tuple[str, str]]] = []
-    for _ in range(num_lineups):
+    for _ in range(casual_count):
         chosen: list[tuple[str, str]] = []
         used_ids: set[str] = set()
         team_counts: dict[str, int] = {}
@@ -231,7 +267,7 @@ def synthesize_field(
         if len(chosen) == len(slot_instances):
             lineups.append(chosen)
 
-    return lineups
+    return sharp_lineups + lineups
 
 
 def _score_lineups(
@@ -296,6 +332,7 @@ def simulate_field(
     total_prizes: float | None = None,
     entry_fee: float | None = None,
     max_entries: int | None = None,
+    sharp_field_lineups: list[LineupResult] | None = None,
 ) -> list[FieldSimResult]:
     """Returns one FieldSimResult per candidate lineup, in input order.
 
@@ -305,6 +342,13 @@ def simulate_field(
     (settings.assumed_rake_pct/cash_line_pct against the synthetic field
     size) is used and `payout_basis` is reported as "approximate_generic"
     so callers never mistake it for a real number.
+
+    `sharp_field_lineups`: real lineups from re-running this same
+    portfolio optimizer (a different seed/randomness than the caller's
+    own candidates) to seed the field's "sharp" cohort — see
+    synthesize_field's docstring and module limitation #1. Without this,
+    the field is 100% fast greedy-random sampling and systematically
+    underrates how competitive a real field actually is.
     """
     settings = settings or FieldSimSettings()
     rng = np.random.default_rng(settings.seed)
@@ -317,7 +361,10 @@ def simulate_field(
         ]
     n_sims = min(len(any_draws), settings.max_sims_used)
 
-    field_lineups = synthesize_field(pool, ownership_by_player_id, rules, settings.num_field_lineups, settings, rng)
+    field_lineups = synthesize_field(
+        pool, ownership_by_player_id, rules, settings.num_field_lineups, settings, rng,
+        sharp_field_lineups=sharp_field_lineups,
+    )
     slot_score_mult = {s.name: s.score_multiplier for s in rules.slots}
 
     field_scores = _score_lineups(field_lineups, slot_score_mult, player_draws, n_sims)  # (field_size, n_sims)
