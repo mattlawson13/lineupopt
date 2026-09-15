@@ -1314,6 +1314,7 @@ def _optimize_lineups(db, slate, dk_player_rows, ensemble_by_player_id, ownershi
             payout_shape_alpha=field_cfg.get("payout_shape_alpha", 2.5),
             assumed_rake_pct=field_cfg.get("assumed_rake_pct", 0.15),
             min_ownership_weight_pct=field_cfg.get("min_ownership_weight_pct", 0.5),
+            default_max_entries=field_cfg.get("default_max_entries", 10_000),
             seed=options.seed,
         ),
         total_prizes=total_prizes, entry_fee=entry_fee, max_entries=max_entries,

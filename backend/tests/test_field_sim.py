@@ -96,6 +96,38 @@ def test_roi_uses_real_contest_numbers_when_given():
     assert generic[0].payout_basis == "approximate_generic"
 
 
+def test_assumed_field_size_is_decoupled_from_the_sample_count():
+    # Regression test for a real bug caught in a live production build:
+    # without a specific contest's real max_entries, the assumed REAL
+    # field size fell back to num_field_lineups (the SAMPLE count used
+    # only to estimate percentile placement) — so a build run with 1,000
+    # synthetic samples reported win%/cash% as if the real contest had
+    # only 1,000 entries (measured live: a 59% win rate / 99.8% cash rate
+    # for an actual large-field GPP). Doubling the sample size should
+    # barely move the reported numbers now that they're computed against
+    # settings.default_max_entries instead of the sample count itself.
+    pool = make_pool()
+    rules = get_contest_rules("nfl", "classic")
+    draws = make_draws(pool)
+    ownership = make_ownership(pool)
+    lineup = optimize_single_lineup(pool, rules)
+
+    small_sample = simulate_field(
+        [lineup], pool, ownership, rules, draws,
+        settings=FieldSimSettings(num_field_lineups=200, seed=3),
+    )[0]
+    big_sample = simulate_field(
+        [lineup], pool, ownership, rules, draws,
+        settings=FieldSimSettings(num_field_lineups=2000, seed=3),
+    )[0]
+    assert abs(small_sample.cash_pct - big_sample.cash_pct) < 10.0
+    # win_pct (literal rank==1) is a much rarer, noisier event than
+    # cashing — a looser tolerance here still rules out the real bug
+    # (which swung win_pct by tens of points, not single digits, because
+    # it changed the entire assumed contest size, not just sampling noise).
+    assert abs(small_sample.win_pct - big_sample.win_pct) < 15.0
+
+
 def test_no_draws_returns_unavailable_not_a_crash():
     pool = make_pool()
     rules = get_contest_rules("nfl", "classic")

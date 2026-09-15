@@ -51,6 +51,16 @@ class FieldSimSettings:
     payout_shape_alpha: float = 2.5
     assumed_rake_pct: float = 0.15
     min_ownership_weight_pct: float = 0.5
+    # Used ONLY as the assumed real contest size when no specific
+    # dk_contest_id's real max_entries is available — deliberately NOT the
+    # same number as num_field_lineups (the synthetic sample count).
+    # Conflating those two was a real bug: reporting win%/cash% against a
+    # 1,000-entry field when the real thing is a 50,000-entry GPP produces
+    # absurdly optimistic numbers (measured live: 59% win rate, 99.8%
+    # cash on a real large_field_gpp build) that have nothing to do with
+    # the actual contest size. 10,000 is a generic mid-large-GPP
+    # assumption, not a guess at any specific contest.
+    default_max_entries: int = 10_000
     seed: int | None = None
 
 
@@ -301,7 +311,7 @@ def simulate_field(
             for _ in candidate_lineups
         ]
 
-    real_field_size = max_entries or field_size
+    real_field_size = max_entries or settings.default_max_entries
     if total_prizes and entry_fee and max_entries:
         payout_basis = "contest_real"
     else:
