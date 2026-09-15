@@ -41,6 +41,8 @@ def build_slate(req: BuildSlateRequest):
     options = BuildOptions(
         num_simulations=req.num_simulations, num_lineups=req.num_lineups,
         objective=req.objective, seed=req.seed, dk_contest_id=req.dk_contest_id,
+        max_player_exposure_pct=req.max_player_exposure_pct,
+        max_captain_exposure_pct=req.max_captain_exposure_pct,
     )
     return StreamingResponse(
         _sse_stream(req.dk_draft_group_id, None, options), media_type="text/event-stream"
@@ -54,11 +56,16 @@ async def build_slate_from_csv(
     num_simulations: int = Form(10000),
     num_lineups: int = Form(20),
     objective: str = Form("large_field_gpp"),
+    max_player_exposure_pct: float | None = Form(None),
+    max_captain_exposure_pct: float | None = Form(None),
 ):
     """Build a slate from DraftKings' official salary-export CSV — the
     zero-scraping fallback path (spec section 2/4)."""
     csv_bytes = await file.read()
-    options = BuildOptions(num_simulations=num_simulations, num_lineups=num_lineups, objective=objective)
+    options = BuildOptions(
+        num_simulations=num_simulations, num_lineups=num_lineups, objective=objective,
+        max_player_exposure_pct=max_player_exposure_pct, max_captain_exposure_pct=max_captain_exposure_pct,
+    )
     return StreamingResponse(
         _sse_stream(dk_draft_group_id, csv_bytes.decode("utf-8"), options), media_type="text/event-stream"
     )

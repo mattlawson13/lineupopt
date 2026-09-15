@@ -72,6 +72,13 @@ export default function BuildSlatePanel({
   const [numSims, setNumSims] = useState(3000);
   const [numLineups, setNumLineups] = useState(10);
   const [objective, setObjective] = useState("large_field_gpp");
+  // Portfolio concentration controls, directly in the user's hands instead
+  // of a hardcoded rule — max % of the portfolio any one player (or,
+  // Showdown, any one captain) can appear in. Defaults match the backend's
+  // config/optimization_settings.yaml (default_diversification) — left
+  // untouched unless the user drags a slider.
+  const [maxPlayerExposure, setMaxPlayerExposure] = useState(40);
+  const [maxCaptainExposure, setMaxCaptainExposure] = useState(25);
   const [events, setEvents] = useState<BuildProgressEvent[]>([]);
   const [building, setBuilding] = useState(false);
 
@@ -105,6 +112,9 @@ export default function BuildSlatePanel({
       .finally(() => setContestsLoading(false));
   }, [draftGroupId]);
 
+  const selectedSlate = availableSlates.find((s) => s.dk_draft_group_id === draftGroupId);
+  const isShowdown = selectedSlate?.contest_format === "showdown";
+
   const handleBuild = () => {
     if (!draftGroupId) return;
     setEvents([]);
@@ -113,6 +123,8 @@ export default function BuildSlatePanel({
       {
         dk_draft_group_id: draftGroupId, num_simulations: numSims, num_lineups: numLineups, objective,
         dk_contest_id: contestId || undefined,
+        max_player_exposure_pct: maxPlayerExposure,
+        max_captain_exposure_pct: isShowdown ? maxCaptainExposure : undefined,
       },
       (evt) => {
         setEvents((prev) => {
@@ -224,6 +236,34 @@ export default function BuildSlatePanel({
                 </option>
               ))}
             </select>
+          </label>
+        )}
+        <label className={`flex flex-col gap-1 text-xs text-slate-400 ${isShowdown ? "" : "col-span-2 sm:col-span-4"}`}>
+          Max player exposure <span className="text-slate-200">{maxPlayerExposure}%</span>
+          <span className="text-slate-600">No single player appears in more than this share of the portfolio</span>
+          <input
+            type="range"
+            min={5}
+            max={100}
+            step={5}
+            value={maxPlayerExposure}
+            onChange={(e) => setMaxPlayerExposure(Number(e.target.value))}
+            className="accent-accent"
+          />
+        </label>
+        {isShowdown && (
+          <label className="flex flex-col gap-1 text-xs text-slate-400">
+            Max captain exposure <span className="text-slate-200">{maxCaptainExposure}%</span>
+            <span className="text-slate-600">No single player is CPT in more than this share of the portfolio</span>
+            <input
+              type="range"
+              min={5}
+              max={100}
+              step={5}
+              value={maxCaptainExposure}
+              onChange={(e) => setMaxCaptainExposure(Number(e.target.value))}
+              className="accent-accent"
+            />
           </label>
         )}
       </div>

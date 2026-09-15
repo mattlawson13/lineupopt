@@ -27,16 +27,13 @@ logger = logging.getLogger("lineupopt.optimization")
 def _solve_one_lineup(
     pool, rules, forced_team_min_counts, stack_team, previous_player_sets,
     effective_max_overlap, min_salary_used, lineup_index: int, warnings: list[str],
-    forced_captain_player_id: str | None = None,
 ) -> LineupResult:
     """Tries the strictest constraint combination first (forced stack +
     salary floor), then relaxes one constraint at a time rather than
     aborting the whole portfolio the moment either one doesn't fit this
     lineup's shrunken, exposure-capped pool — a later lineup in a big
     batch has fewer eligible players left than the first one did. Every
-    relaxation is reported, never silent. `forced_captain_player_id` is
-    never relaxed away — a smash-spot captain guarantee that silently
-    degrades to "maybe" isn't a guarantee.
+    relaxation is reported, never silent.
     """
     attempts: list[dict] = []
     if stack_team:
@@ -50,7 +47,6 @@ def _solve_one_lineup(
         try:
             lineup = optimize_single_lineup(
                 pool, rules, forced_team_min_counts=forced_team_min_counts,
-                forced_captain_player_id=forced_captain_player_id,
                 exclude_lineups=previous_player_sets, max_overlap=effective_max_overlap, **kwargs,
             )
         except InfeasibleLineupError as exc:
@@ -98,7 +94,6 @@ def generate_portfolio(
     diversification: DiversificationSettings,
     forced_team_min_counts: dict[str, int] | None = None,
     forced_qb_stack_teams: list[str] | None = None,
-    forced_captain_player_ids: list[str] | None = None,
     randomness_pct: float = 0.0,
     seed: int | None = None,
     seed_exclude_lineups: list[set[str]] | None = None,
@@ -111,20 +106,16 @@ def generate_portfolio(
     linear objective, which under-selects it. Pass None/[] for stack-
     agnostic modes (e.g. cash, which optimizes floor/consistency instead).
 
-    `forced_captain_player_ids`, when given, reserves the FIRST
-    len(forced_captain_player_ids) lineups to force each listed player
-    into DK Showdown's CPT slot (index i uses forced_captain_player_ids[i]
-    directly, not cycled — the caller decides how many guaranteed slots a
-    given smash-spot pick gets). This exists because the objective
-    function and captain-exposure cap alone don't guarantee a real,
-    well-known GPP pattern (e.g. the lead back on a big favorite in a
-    Showdown, whose usage tends to climb as the game gets out of hand)
-    ever actually gets captained — confirmed live: a real portfolio
-    captained that exact profile in just 1 of 17 lineups purely because a
-    higher pre-game QB projection edged it out in the raw objective, with
-    no structural floor requiring real coverage of the other side of that
-    bet. The remaining lineups still go through the normal, freely
-    ILP-chosen (and captain-exposure-capped) process.
+    Captain selection for DK Showdown is left entirely to the objective
+    function plus `max_captain_exposure_pct` (below) — not a forced
+    guarantee for any specific player/profile. An earlier version of this
+    function forced a fixed share of lineups to captain a detected
+    "smash spot" lead RB; that was reverted (2026-09-15) because it
+    substitutes a hardcoded rule for genuinely fixing why the objective
+    didn't already favor that player — see optimizer.py's OptimizerPlayer.
+    stack_value for the real fix (excluding the correlation/stacking term
+    from the CPT slot's 1.5x multiplier). Use max_captain_exposure_pct to
+    control concentration instead.
 
     `seed_exclude_lineups`: player-id sets for lineups that already exist
     (e.g. from an earlier build/generate call) — seeds the same overlap
@@ -178,9 +169,6 @@ def generate_portfolio(
 
     for i in range(num_lineups):
         stack_team = forced_qb_stack_teams[i % len(forced_qb_stack_teams)] if forced_qb_stack_teams else None
-        forced_captain = (
-            forced_captain_player_ids[i] if forced_captain_player_ids and i < len(forced_captain_player_ids) else None
-        )
         lineup: LineupResult | None = None
         last_exc: InfeasibleLineupError | None = None
         relaxed = False
@@ -193,13 +181,13 @@ def generate_portfolio(
                     eff_max_team_allowed = max(max_team_allowed, math.ceil(max_team_allowed * relax_mult))
                     eff_max_qb_allowed = max(max_qb_allowed, math.ceil(max_qb_allowed * relax_mult))
                     eff_max_captain_allowed = max(max_captain_allowed, math.ceil(max_captain_allowed * relax_mult))
-                    if exposure_count[p.player_id] >= eff_max_allowed and p.player_id != forced_captain:
+                    if exposure_count[p.player_id] >= eff_max_allowed:
                         p.excluded = True
-                    if p.position == "QB" and qb_count.get(p.player_id, 0) >= eff_max_qb_allowed and p.player_id != forced_captain:
+                    if p.position == "QB" and qb_count.get(p.player_id, 0) >= eff_max_qb_allowed:
                         p.excluded = True
-                    if captain_count.get(p.player_id, 0) >= eff_max_captain_allowed and p.player_id != forced_captain:
+                    if captain_count.get(p.player_id, 0) >= eff_max_captain_allowed:
                         p.captain_excluded = True
-                    if team_count.get(p.team, 0) >= eff_max_team_allowed and p.player_id != forced_captain:
+                    if team_count.get(p.team, 0) >= eff_max_team_allowed:
                         p.excluded = True
                 if randomness_pct > 0:
                     jitter = rng.uniform(-randomness_pct / 100, randomness_pct / 100)
@@ -209,7 +197,6 @@ def generate_portfolio(
                 lineup = _solve_one_lineup(
                     pool, rules, forced_team_min_counts, stack_team, previous_player_sets,
                     effective_max_overlap, min_salary_used, i, warnings,
-                    forced_captain_player_id=forced_captain,
                 )
                 relaxed = relax_mult != 1.0
                 break
@@ -228,7 +215,6 @@ def generate_portfolio(
                 lineup = _solve_one_lineup(
                     copy.deepcopy(players), rules, forced_team_min_counts, stack_team, [],
                     rules.roster_size, min_salary_used, i, warnings,
-                    forced_captain_player_id=forced_captain,
                 )
                 warnings.append(f"Lineup {i + 1}: repeats an earlier lineup's players — pool too thin to keep every lineup unique at this count")
             except InfeasibleLineupError as exc:

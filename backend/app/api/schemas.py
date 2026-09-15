@@ -15,6 +15,13 @@ class BuildSlateRequest(BaseModel):
     # entering, so a 47,562-entry contest and a 500,000-entry contest don't
     # get treated identically just because both are "large_field_gpp".
     dk_contest_id: str | None = None
+    # Portfolio concentration controls — override
+    # config/optimization_settings.yaml's default_diversification when set.
+    # A deliberate alternative to a hardcoded "force this player" rule: the
+    # user directly controls how concentrated a portfolio gets around any
+    # one player, or (Showdown) around any one captain, instead.
+    max_player_exposure_pct: float | None = None
+    max_captain_exposure_pct: float | None = None
 
 
 class ManualOptimizeRequest(BaseModel):
@@ -33,6 +40,7 @@ class ManualOptimizeRequest(BaseModel):
     min_projection: float | None = None
     max_ownership_pct: float | None = None
     max_player_exposure_pct: float | None = None
+    max_captain_exposure_pct: float | None = None
     max_lineup_overlap: int | None = None
     seed: int | None = None
 

@@ -21,6 +21,24 @@ class OptimizerPlayer:
     game_id: str
     salary: int
     objective_value: float  # the score being maximized — caller decides what this represents (see portfolio/builder.py)
+    # The correlation/stacking-hub component of this player's score, kept
+    # separate from objective_value rather than folded into it. Root cause
+    # of a real captain-selection bug (confirmed live 2026-09-15): a QB is
+    # party to one correlation entry per teammate AND opposing pass-catcher
+    # (qb_own_wr/te/rb, qb_opp_qb/wr/te), so summing correlation across all
+    # of a player's relationships gives a QB many more terms than a RB or
+    # WR ever has (who each carry only 1-2) — a structural fan-out, not a
+    # reflection of true single-player captain-worthiness. That's a
+    # legitimate signal for PORTFOLIO construction (rewarding stack hubs
+    # across a lineup), but folding it into objective_value meant DK
+    # Showdown's CPT 1.5x slot multiplier applied to it too, amplifying an
+    # already-inflated QB score again purely for being captain — which is
+    # why a real portfolio captained a QB in most lineups and a real
+    # smash-spot lead RB (blowout-favored team, correctly boosted by the
+    # game-script simulation) in only 1/17-20 despite having the better
+    # game. Keeping it out of the slot-multiplied objective fixes captain
+    # selection for every slate going forward, not just this one.
+    stack_value: float = 0.0
     locked: bool = False
     excluded: bool = False
     # Distinct from `excluded`: still eligible for every other slot, just
@@ -58,7 +76,6 @@ def optimize_single_lineup(
     rules: ContestRules,
     forced_team_min_counts: dict[str, int] | None = None,
     forced_qb_stack_team: str | None = None,
-    forced_captain_player_id: str | None = None,
     exclude_lineups: list[set[str]] | None = None,
     max_overlap: int | None = None,
     min_salary_used: int | None = None,
@@ -73,11 +90,6 @@ def optimize_single_lineup(
     teammate — i.e. a genuine QB+pass-catcher stack (spec section 16),
     rather than leaving stacking to emerge (or not) from the objective
     alone, which tends to under-select correlation in a linear ILP.
-
-    `forced_captain_player_id`, when set, requires DK Showdown's CPT slot
-    specifically be filled by that player — see diversification.py's
-    smash-spot captain guarantee for why this can't just be left to the
-    objective function either.
     """
     pool = [p for p in players if not p.excluded]
     if not pool:
@@ -97,10 +109,19 @@ def optimize_single_lineup(
     if not x:
         raise InfeasibleLineupError("No eligible (player, slot) pairs — check position eligibility")
 
-    # Objective: sum of objective_value * slot's score_multiplier (captain/showdown support)
+    # Objective: objective_value * slot's score_multiplier (captain/showdown
+    # support), PLUS stack_value at a flat, un-multiplied weight regardless
+    # of slot. stack_value (correlation/stacking-hub score) deliberately
+    # does NOT get the CPT 1.5x premium — see OptimizerPlayer.stack_value's
+    # docstring: it's a portfolio-construction signal (rewarding a player
+    # for being correlated with many teammates/opponents), not a measure of
+    # single-player captain-worthiness, and multiplying it by the captain
+    # premium was root-caused to a real bug where a QB's structurally
+    # larger correlation fan-out got double-amplified for CPT selection.
     slot_mult = {s.name: s.score_multiplier for s in rules.slots}
+    by_pid = {p.player_id: p for p in pool}
     prob += pulp.lpSum(
-        var * next(p.objective_value for p in pool if p.player_id == pid) * slot_mult[slot]
+        var * (by_pid[pid].objective_value * slot_mult[slot] + by_pid[pid].stack_value)
         for (pid, slot), var in x.items()
     )
 
@@ -158,12 +179,6 @@ def optimize_single_lineup(
             ]
             if catcher_vars_from_team:
                 prob += pulp.lpSum(catcher_vars_from_team) >= 1
-
-    # Forced captain: DK Showdown's CPT slot must be this specific player.
-    if forced_captain_player_id:
-        cpt_var = x.get((forced_captain_player_id, "CPT"))
-        if cpt_var is not None:
-            prob += cpt_var == 1
 
     # Team stacking: at least N players from a given team
     for team, min_count in (forced_team_min_counts or {}).items():
@@ -223,10 +238,10 @@ def optimize_single_lineup(
     objective_total = 0.0
     for (pid, slot), var in x.items():
         if var.value() and var.value() > 0.5:
-            p = next(pp for pp in pool if pp.player_id == pid)
+            p = by_pid[pid]
             mult = next(s.salary_multiplier for s in rules.slots if s.name == slot)
             assignments.append(LineupPlayerAssignment(pid, slot, p.salary, p.objective_value))
             salary_used += int(p.salary * mult)
-            objective_total += p.objective_value * slot_mult[slot]
+            objective_total += p.objective_value * slot_mult[slot] + p.stack_value
 
     return LineupResult(assignments=assignments, salary_used=salary_used, objective_total=round(objective_total, 2))

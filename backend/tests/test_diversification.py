@@ -82,24 +82,6 @@ def test_large_request_from_thin_pool_still_generates_full_count():
     assert len(result.lineups) == 40
 
 
-def test_forced_captain_gets_guaranteed_share():
-    # A real GPP pattern (the lead back on a big favorite) shouldn't be
-    # left entirely to the objective function to maybe find — this
-    # reserves the first N lineups for a specific forced captain.
-    players = make_showdown_pool()
-    lead_back_id = next(p.player_id for p in players if p.position == "RB")
-    rules = get_contest_rules("nfl", "showdown")
-    result = generate_portfolio(
-        players, rules, num_lineups=20, diversification=DiversificationSettings(),
-        forced_captain_player_ids=[lead_back_id] * 2, randomness_pct=8.0, seed=9,
-    )
-    assert len(result.lineups) == 20
-    forced_captains = [
-        a.player_id for lu in result.lineups[:2] for a in lu.assignments if a.slot == "CPT"
-    ]
-    assert forced_captains == [lead_back_id, lead_back_id]
-
-
 def test_captain_exposure_cap_respected():
     # Reproduces the real fix: nothing previously stopped the same player
     # from being CPT (DK Showdown's 1.5x slot) in every lineup a portfolio

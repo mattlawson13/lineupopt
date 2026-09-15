@@ -83,3 +83,31 @@ def test_forced_qb_stack_team_includes_teammate():
     assert pool_by_id[qb.player_id].team == "BUF"
     catchers = [a for a in lineup.assignments if pool_by_id[a.player_id].position in ("WR", "TE") and pool_by_id[a.player_id].team == "BUF"]
     assert len(catchers) >= 1
+
+
+def test_showdown_captain_multiplier_does_not_amplify_stack_value():
+    """Regression test for the real captain-selection bug root-caused
+    2026-09-15: stack_value (the correlation/stacking-hub term, which a QB
+    structurally accumulates much more of than a RB/WR — see
+    OptimizerPlayer.stack_value) must NOT get DK Showdown's CPT 1.5x
+    premium applied to it, or a player with a big stack bonus but a worse
+    single-player score gets crowned captain purely from that bonus being
+    tripled. Exactly 6 players fill Showdown's exact 6-slot roster (no
+    other feasible combination), so the only real choice left to the
+    solver is who becomes captain.
+    """
+    rules = get_contest_rules("nfl", "showdown")
+    players = [
+        OptimizerPlayer("a", "QB", "BUF", "g1", 6000, 10.0, stack_value=0.0),
+        OptimizerPlayer("b", "QB", "NYJ", "g1", 6000, 6.0, stack_value=5.0),
+        OptimizerPlayer("c", "RB", "BUF", "g1", 6000, 5.0, stack_value=0.0),
+        OptimizerPlayer("d", "RB", "NYJ", "g1", 6000, 5.0, stack_value=0.0),
+        OptimizerPlayer("e", "WR", "BUF", "g1", 6000, 5.0, stack_value=0.0),
+        OptimizerPlayer("f", "WR", "NYJ", "g1", 6000, 5.0, stack_value=0.0),
+    ]
+    lineup = optimize_single_lineup(players, rules)
+    captain = next(a for a in lineup.assignments if a.slot == "CPT")
+    # Old (buggy) behavior would have captained "b": (6+5)*1.5=16.5 beats
+    # (10+0)*1.5=15. Correct behavior captains "a": 10*1.5+0=15 beats
+    # 6*1.5+5=14 once the CPT multiplier stops applying to stack_value.
+    assert captain.player_id == "a"

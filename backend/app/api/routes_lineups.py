@@ -223,16 +223,20 @@ def generate_lineups(req: ManualOptimizeRequest, db: Session = Depends(get_db)):
         # projection — otherwise a cheap backup QB's objective_value gets
         # inflated purely from being "connected" to many teammates.
         depth_multiplier = depth_multipliers.get(row.player_id, 1.0)
+        # objective_value excludes the correlation/stacking term — kept
+        # separate as stack_value so DK Showdown's CPT 1.5x slot multiplier
+        # doesn't amplify it (see optimizer.py's OptimizerPlayer.stack_value
+        # for the real captain-selection bug this fixes).
         objective_value = (
             weights.get("median", 0) * ens.median + weights.get("projection", 0) * ens.ensemble_projection
             + weights.get("ceiling", 0) * (sim.ceiling if sim else ens.ceiling) + weights.get("floor", 0) * ens.floor
             + weights.get("leverage", 0) * leverage_proxy + weights.get("volatility", 0) * (sim.std_dev if sim else ens.std_dev)
-            + weights.get("correlation", 0) * correlation_scores.get(row.player_id, 0.0) * CORRELATION_SCALE * depth_multiplier
         )
+        stack_value = weights.get("correlation", 0) * correlation_scores.get(row.player_id, 0.0) * CORRELATION_SCALE * depth_multiplier
         salary = row.salaries[-1].salary if row.salaries else 0
         optimizer_players.append(OptimizerPlayer(
             player_id=row.player_id, position=row.dk_position, team=row.team_abbreviation, game_id=row.game_id,
-            salary=salary, objective_value=round(objective_value, 3),
+            salary=salary, objective_value=round(objective_value, 3), stack_value=round(stack_value, 3),
             locked=row.player_id in req.locked_player_ids, excluded=row.player_id in req.excluded_player_ids,
         ))
 
@@ -240,6 +244,8 @@ def generate_lineups(req: ManualOptimizeRequest, db: Session = Depends(get_db)):
     diversification = DiversificationSettings(**opt_cfg["default_diversification"])
     if req.max_player_exposure_pct is not None:
         diversification.max_player_exposure_pct = req.max_player_exposure_pct
+    if req.max_captain_exposure_pct is not None:
+        diversification.max_captain_exposure_pct = req.max_captain_exposure_pct
     if req.max_lineup_overlap is not None:
         diversification.max_lineup_overlap = req.max_lineup_overlap
 

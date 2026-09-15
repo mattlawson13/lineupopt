@@ -183,6 +183,8 @@ export const api = {
       num_lineups: number;
       objective: string;
       dk_contest_id?: string;
+      max_player_exposure_pct?: number;
+      max_captain_exposure_pct?: number;
     },
     onEvent: (evt: BuildProgressEvent) => void,
     onDone: () => void,
